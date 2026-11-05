@@ -1,0 +1,1475 @@
+<template>
+  <style>
+    @font-face {
+      font-family: "YuB";
+      src: url("assets/fonts/YuGothicB.ttf");
+    }
+    @font-face {
+      font-family: "NS";
+      src: url("assets/fonts/NotoSans-Bold.ttf");
+    }
+    @font-face {
+      font-family: "YuM";
+      src: url("assets/fonts/YuGothicM.ttf");
+    }
+    @font-face {
+      font-family: "Bahn";
+      src: url("assets/fonts/Bahnschrift.ttf");
+      font-weight: 300 700;
+    }
+    #root {
+      position: absolute;
+      inset: 0;
+      background: #000;
+      overflow: hidden;
+    }
+    #w-canvas {
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 1500px;
+      height: 1500px;
+      display: block;
+    }
+  </style>
+  <div id="root" data-composition-id="world" data-width="1500" data-height="1500" data-duration="26.68">
+    <canvas id="w-canvas" width="1500" height="1500" data-layout-allow-overflow></canvas>
+  </div>
+  <script>
+    window.__hf = window.__hf || {};
+    window.__hf.buildReady = window.__hf.buildReady || {};
+    window.__hf.buildReady["exit-world"] = new Promise((r) => (window.__exWorldBuilt = r));
+    (function () {
+      const clock = { v: 0 };
+      const tl = gsap.timeline({ paused: true });
+      tl.to(clock, { v: 1, duration: 26.68, ease: "none" }, 0);
+      window.__timelines = window.__timelines || {};
+      window.__timelines["world"] = tl;
+    })();
+  </script>
+  <script type="module">
+    import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.181.2/+esm";
+    import { RectAreaLightUniformsLib } from "https://cdn.jsdelivr.net/npm/three@0.181.2/examples/jsm/lights/RectAreaLightUniformsLib.js/+esm";
+
+    // =====================================================================
+    // timing — transcript/TRANSCRIPT.md (lines L1..L11)
+    // =====================================================================
+    const DUR = 26.68, FPS = 30, RES = 1500;
+    const T = {
+      HELP: 2.1, FIND: 3.62, ST1: 5.32, ST2: 5.71, ST3: 6.13, BURST1: 7.04, BURST2: 7.36, BURST3: 7.59,
+      TURN: 9.22, CLEAR: 9.5, CIRCLE: 10.6, BLK: 12.12, B: 12.28,
+      LED2: 14.08, SCR: 15.45, PHONE: 17.25, P1: 19.02, P2: 20.36, P3: 21.66,
+      DARK: 22.74, Q: 24.38, OFF: 26.09, RESET: 26.3,
+    };
+
+    // =====================================================================
+    // helpers
+    // =====================================================================
+    const PI = Math.PI;
+    const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+    const lerp = (a, b, u) => a + (b - a) * u;
+    const smooth = (u) => { u = clamp(u, 0, 1); return u * u * (3 - 2 * u); };
+    const ramp = (t, a, b) => clamp((t - a) / (b - a), 0, 1);
+    function hash1(n) { const x = Math.sin(n * 127.1 + 311.7) * 43758.5453; return x - Math.floor(x); }
+    function hash2(x, y) { const v = Math.sin(x * 12.9898 + y * 78.233) * 43758.5453; return v - Math.floor(v); }
+    function mulberry32(a) { return function () { a |= 0; a = (a + 0x6d2b79f5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
+    function vnoise(x, seed = 0) { const i = Math.floor(x), f = x - i; return lerp(hash1(i + seed * 101.3), hash1(i + 1 + seed * 101.3), smooth(f)) * 2 - 1; }
+    const frameOf = (t) => Math.floor(t * FPS + 1e-4);
+    // beat grid of the instrumental (librosa beat_track, 143.55 BPM)
+    const BEATS = [0.093, 0.488, 0.906, 1.347, 1.765, 2.206, 2.647, 3.088, 3.506, 3.947, 4.389, 4.807, 5.224, 5.689, 6.13, 6.571, 6.989, 7.43, 7.848, 8.29, 8.731, 9.172, 9.59, 10.031, 10.449, 10.89, 11.331, 11.773, 12.19, 12.608, 13.05, 13.491, 13.932, 14.373, 14.814, 15.256, 15.673, 16.115, 16.533, 16.974, 17.415, 17.856, 18.297, 18.715, 19.133, 19.574, 20.016, 20.457, 20.875, 21.316, 21.757, 22.198, 22.616, 23.034, 23.429, 23.824, 24.218, 24.613, 25.008, 25.426, 25.844];
+    const BEAT = 0.418;
+    function beatPos(t) {
+      if (t <= BEATS[0]) return (t - BEATS[0]) / BEAT;
+      const n = BEATS.length;
+      if (t >= BEATS[n - 1]) return n - 1 + (t - BEATS[n - 1]) / BEAT;
+      let i = 0; while (t >= BEATS[i + 1]) i++;
+      return i + (t - BEATS[i]) / (BEATS[i + 1] - BEATS[i]);
+    }
+    const nextBeat = (t) => { for (const b of BEATS) if (b >= t - 1e-4) return b; return t; };
+    const V3 = (x, y, z) => new THREE.Vector3(x, y, z);
+
+    // ---------------- canvas
+    function C(w, h) { const c = document.createElement("canvas"); c.width = w; c.height = h; return [c, c.getContext("2d")]; }
+    function TX(c, srgb = true, rep = false) {
+      const t = new THREE.CanvasTexture(c);
+      t.colorSpace = srgb ? THREE.SRGBColorSpace : THREE.NoColorSpace;
+      t.anisotropy = 16;
+      if (rep) { t.wrapS = t.wrapT = THREE.RepeatWrapping; }
+      t.needsUpdate = true;
+      return t;
+    }
+    const F = { jp: '"NS", "YuB"', jpm: '"YuM"', lat: '"Bahn"' };
+    function txt(g, s, x, y, size, font, color, maxW = 1e9, align = "center", weight = "") {
+      const set = () => (g.font = (weight ? weight + " " : "") + size + "px " + font);
+      set();
+      const w = g.measureText(s).width;
+      if (w > maxW) { size = Math.floor((size * maxW) / w); set(); }
+      g.fillStyle = color; g.textAlign = align; g.textBaseline = "alphabetic";
+      g.fillText(s, x, y);
+      return size;
+    }
+    // the font size at which every row fits maxW (rows share one size, like a typeset sign)
+    function fitSize(g, rows, size, font, maxW, weight = "") {
+      let s = size;
+      for (const r of rows) { g.font = (weight ? weight + " " : "") + s + "px " + font; const w = g.measureText(r).width; if (w > maxW) s = Math.floor((s * maxW) / w); }
+      return s;
+    }
+    // draw only the first `n` words of a row while keeping the full row's centred layout
+    function rowPrefix(g, full, n, cx, y, size, font, color, weight = "") {
+      g.font = (weight ? weight + " " : "") + size + "px " + font;
+      const words = full.split(" ");
+      const wFull = g.measureText(full).width;
+      const pre = words.slice(0, n).join(" ");
+      g.fillStyle = color; g.textAlign = "left"; g.textBaseline = "alphabetic";
+      if (n > 0) g.fillText(pre, cx - wFull / 2, y);
+    }
+    function rr(g, x, y, w, h, r, fill, stroke, lw = 2) {
+      g.beginPath(); g.roundRect(x, y, w, h, r);
+      if (fill) { g.fillStyle = fill; g.fill(); }
+      if (stroke) { g.strokeStyle = stroke; g.lineWidth = lw; g.stroke(); }
+    }
+    function bars(g, x, y, w, rows, h, gap, color, rng) {
+      g.fillStyle = color;
+      for (let i = 0; i < rows; i++) { const ww = i === rows - 1 ? w * (0.35 + 0.4 * rng()) : w * (0.82 + 0.18 * rng()); g.fillRect(x, y + i * (h + gap), ww, h); }
+    }
+    function paper(g, w, h, base, rng, amt = 6) {
+      g.fillStyle = base; g.fillRect(0, 0, w, h);
+      const d = g.getImageData(0, 0, w, h), a = d.data;
+      for (let i = 0; i < a.length; i += 4) { const n = (rng() - 0.5) * amt; a[i] += n; a[i + 1] += n; a[i + 2] += n; }
+      g.putImageData(d, 0, 0);
+    }
+
+    // ---------------- surface maps (albedo / normal / roughness) from one per-pixel function
+    function makeMaps(px, py, fn, k, colRep = true) {
+      const H = new Float32Array(px * py);
+      const [cc, cg] = C(px, py), [nc, ng] = C(px, py), [rc, rg] = C(px, py);
+      const ci = cg.createImageData(px, py), ni = ng.createImageData(px, py), ri = rg.createImageData(px, py);
+      for (let y = 0; y < py; y++) for (let x = 0; x < px; x++) {
+        const i = y * px + x, o = fn(x, y);
+        H[i] = o[0];
+        ci.data[i * 4] = o[1]; ci.data[i * 4 + 1] = o[2]; ci.data[i * 4 + 2] = o[3]; ci.data[i * 4 + 3] = 255;
+        const r = clamp(o[4], 0, 1) * 255;
+        ri.data[i * 4] = r; ri.data[i * 4 + 1] = r; ri.data[i * 4 + 2] = r; ri.data[i * 4 + 3] = 255;
+      }
+      for (let y = 0; y < py; y++) for (let x = 0; x < px; x++) {
+        const i = y * px + x;
+        const dx = H[y * px + ((x + 1) % px)] - H[y * px + ((x - 1 + px) % px)];
+        const dy = H[((y + 1) % py) * px + x] - H[((y - 1 + py) % py) * px + x];
+        let nx = -dx * k, ny = dy * k, nz = 1; const l = Math.hypot(nx, ny, nz); nx /= l; ny /= l; nz /= l;
+        ni.data[i * 4] = (nx * 0.5 + 0.5) * 255; ni.data[i * 4 + 1] = (ny * 0.5 + 0.5) * 255; ni.data[i * 4 + 2] = (nz * 0.5 + 0.5) * 255; ni.data[i * 4 + 3] = 255;
+      }
+      cg.putImageData(ci, 0, 0); ng.putImageData(ni, 0, 0); rg.putImageData(ri, 0, 0);
+      return { map: TX(cc, true, colRep), normalMap: TX(nc, false, true), roughnessMap: TX(rc, false, true) };
+    }
+    function tileFn({ px, n, gH, bev, base, vary, grout, gVar, rough, roughVar, gRough, tilt, speck, seed }) {
+      const s = px / n;
+      const tiles = [];
+      const r = mulberry32(seed);
+      for (let i = 0; i < n * n; i++) tiles.push({ v: (r() - 0.5) * vary, ta: (r() - 0.5) * tilt, tb: (r() - 0.5) * tilt, ro: (r() - 0.5) * roughVar });
+      return (x, y) => {
+        const tx = Math.floor(x / s), ty = Math.floor(y / s), T0 = tiles[ty * n + tx];
+        const lx = x - tx * s, ly = y - ty * s;
+        const e = Math.min(lx, ly, s - 1 - lx, s - 1 - ly) - gH;
+        const pn = hash2(x * 0.731 + seed, y * 1.37);
+        if (e < 0) { const m = (pn - 0.5) * gVar; return [0, grout[0] + m, grout[1] + m, grout[2] + m, gRough + (pn - 0.5) * 0.1]; }
+        let h = e >= bev ? 1 : Math.sin(((e + 0.5) / bev) * PI * 0.5);
+        h += ((lx - s / 2) / s) * T0.ta + ((ly - s / 2) / s) * T0.tb;
+        let c0 = base[0] + T0.v, c1 = base[1] + T0.v, c2 = base[2] + T0.v;
+        if (speck) {
+          const sp = hash2(x * 1.13 + 7.1, y * 0.91 + seed);
+          if (sp > 1 - speck) { const d = hash2(x, y + 3.3) < 0.6 ? -38 : 18; c0 += d; c1 += d; c2 += d; }
+          const m = (pn - 0.5) * 9; c0 += m; c1 += m; c2 += m;
+        } else { const m = (pn - 0.5) * 3; c0 += m; c1 += m; c2 += m; }
+        if (e < 1.5) { c0 -= 10; c1 -= 10; c2 -= 10; }
+        return [h, c0, c1, c2, rough + T0.ro + (pn - 0.5) * 0.04];
+      };
+    }
+
+    // =====================================================================
+    // renderer, scene, camera
+    // =====================================================================
+    const canvas = document.getElementById("w-canvas");
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, alpha: false, preserveDrawingBuffer: true, powerPreference: "high-performance" });
+    renderer.setPixelRatio(1);
+    renderer.setSize(RES, RES, false);
+    renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
+    renderer.toneMapping = THREE.NoToneMapping;
+    RectAreaLightUniformsLib.init();
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x000000);
+    const FOV = 74, SRES = 1800;
+    const camera = new THREE.PerspectiveCamera(FOV, 1, 0.04, 90);
+    camera.rotation.order = "YXZ";
+    const rt = new THREE.WebGLRenderTarget(SRES, SRES, { type: THREE.HalfFloatType, samples: 4 });
+
+    // =====================================================================
+    // corridor layout (three units: metres, y up; the corridor runs to -z)
+    //  main: x∈[-1.6,1.6], z∈[-27,3.2]; C0 (start connector) x∈[1.6,9.5], z∈[0,3.2]
+    //  C1 (far connector) x∈[-8,-1.6], z∈[-27,-23.8]
+    // =====================================================================
+    const H = 2.8, HW = 1.6;
+    const SEGS = [
+      [-1.6, 3.2, -1.6, -23.8], [1.6, 0, 1.6, -27], [-1.6, 3.2, 9.5, 3.2], [1.6, 0, 9.5, 0], [9.5, 0, 9.5, 3.2],
+      [-8, -27, 1.6, -27], [-8, -23.8, -1.6, -23.8], [-8, -27, -8, -23.8],
+    ];
+    function segDist(px, pz, s) {
+      const [x1, z1, x2, z2] = s, dx = x2 - x1, dz = z2 - z1;
+      const u = clamp(((px - x1) * dx + (pz - z1) * dz) / (dx * dx + dz * dz), 0, 1);
+      return Math.hypot(px - (x1 + dx * u), pz - (z1 + dz * u));
+    }
+    function aoAt(p, n, kind) {
+      if (kind === "floor" || kind === "ceil") {
+        let d = 1e9; for (const s of SEGS) d = Math.min(d, segDist(p.x, p.z, s));
+        return kind === "floor" ? 1 - 0.42 * Math.exp(-d / 0.2) : 1 - 0.32 * Math.exp(-d / 0.3);
+      }
+      let a = (1 - 0.34 * Math.exp(-p.y / 0.16)) * (1 - 0.24 * Math.exp(-(H - p.y) / 0.22));
+      let d = 1e9;
+      for (const s of SEGS) {
+        const sx = s[2] - s[0], sz = s[3] - s[1], l = Math.hypot(sx, sz);
+        if (Math.abs((sx * n.x + sz * n.z) / l) < 0.5) continue; // parallel walls (incl. its own)
+        d = Math.min(d, segDist(p.x, p.z, s));
+      }
+      a *= 1 - 0.3 * Math.exp(-d / 0.22);
+      return a;
+    }
+    function surf(o, u, v, w, h, mat, uvFn, kind, seg = 0.25) {
+      const nu = Math.max(1, Math.ceil(w / seg)), nv = Math.max(1, Math.ceil(h / seg));
+      const O = V3(...o), U = V3(...u), Vv = V3(...v), N = U.clone().cross(Vv).normalize();
+      const pos = [], nor = [], uv = [], col = [], idx = [];
+      for (let j = 0; j <= nv; j++) for (let i = 0; i <= nu; i++) {
+        const a = (w * i) / nu, b = (h * j) / nv;
+        const p = O.clone().addScaledVector(U, a).addScaledVector(Vv, b);
+        pos.push(p.x, p.y, p.z); nor.push(N.x, N.y, N.z);
+        const q = uvFn(p); uv.push(q[0], q[1]);
+        const ao = kind ? aoAt(p, N, kind) : 1; col.push(ao, ao, ao);
+      }
+      for (let j = 0; j < nv; j++) for (let i = 0; i < nu; i++) { const k = j * (nu + 1) + i; idx.push(k, k + 1, k + nu + 1, k + 1, k + nu + 2, k + nu + 1); }
+      const g = new THREE.BufferGeometry();
+      g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+      g.setAttribute("normal", new THREE.Float32BufferAttribute(nor, 3));
+      g.setAttribute("uv", new THREE.Float32BufferAttribute(uv, 2));
+      g.setAttribute("color", new THREE.Float32BufferAttribute(col, 3));
+      g.setIndex(idx);
+      const m = new THREE.Mesh(g, mat); scene.add(m); return m;
+    }
+
+    // ---------------- generic meshes
+    const std = (o) => new THREE.MeshStandardMaterial(o);
+    function box(w, h, d, mat, x, y, z, parent = scene) { const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat); m.position.set(x, y, z); parent.add(m); return m; }
+    function plane(w, h, mat, parent = scene) { const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), mat); parent.add(m); return m; }
+    // a group mounted on a wall: side -1 = left wall (faces +x), +1 = right wall (faces -x); local +z = out of the wall
+    function onWall(side, z, y, off = 0) { const g = new THREE.Group(); g.position.set(side * (HW - off), y, z); g.rotation.y = -side * PI / 2; scene.add(g); return g; }
+    const M = {};
+    function frame(parent, w, h, d = 0.035, t = 0.035) {
+      box(w + 2 * t, t, d, M.alu, 0, h / 2 + t / 2, d / 2, parent); box(w + 2 * t, t, d, M.alu, 0, -h / 2 - t / 2, d / 2, parent);
+      box(t, h, d, M.alu, -w / 2 - t / 2, 0, d / 2, parent); box(t, h, d, M.alu, w / 2 + t / 2, 0, d / 2, parent);
+    }
+
+    // =====================================================================
+    // textures: environment surfaces
+    // =====================================================================
+    function buildSurfaceMats() {
+      const wall = makeMaps(1024, 1024, tileFn({ px: 1024, n: 8, gH: 3, bev: 7, base: [233, 236, 235], vary: 5, grout: [146, 151, 152], gVar: 14, rough: 0.13, roughVar: 0.06, gRough: 0.82, tilt: 0.5, speck: 0, seed: 11 }), 2.6);
+      const floor = makeMaps(1024, 1024, tileFn({ px: 1024, n: 4, gH: 2.5, bev: 4, base: [214, 216, 216], vary: 7, grout: [178, 181, 181], gVar: 10, rough: 0.3, roughVar: 0.08, gRough: 0.75, tilt: 0.25, speck: 0.012, seed: 21 }), 2.2);
+      const ceil = makeMaps(512, 512, (x, y) => {
+        const yy = y % 51.2; const groove = yy < 3 ? 1 : 0;
+        const n = (hash2(x * 0.37, y * 0.61) - 0.5) * 3;
+        const c = groove ? 176 : 228 + n;
+        return [groove ? 0 : 1, c, c + 2, c + 2, groove ? 0.8 : 0.55];
+      }, 1.5);
+      const tact = makeMaps(256, 256, (x, y) => {
+        // four raised direction bars across a 0.3 m tile (run along the corridor)
+        const lx = x % 64; const bar = lx > 14 && lx < 50 && y > 10 && y < 246 ? 1 : 0;
+        const e = bar ? Math.min(lx - 14, 50 - lx, y - 10, 246 - y) : 0; const h = bar ? Math.min(1, e / 6) : 0;
+        const n = (hash2(x * 0.7, y * 0.3) - 0.5) * 8;
+        const edge = (x % 256 < 3 || y % 256 < 3) ? -40 : 0;
+        return [h, 224 + n + edge, 178 + n + edge, 32 + edge * 0.3, 0.55];
+      }, 3.0);
+      const tdot = makeMaps(256, 256, (x, y) => {
+        const cx = (Math.floor(x / 51.2) + 0.5) * 51.2, cy = (Math.floor(y / 51.2) + 0.5) * 51.2;
+        const d = Math.hypot(x - cx, y - cy); const h = d < 16 ? Math.cos((d / 16) * PI * 0.5) : 0;
+        const n = (hash2(x * 0.7, y * 0.3) - 0.5) * 8; const edge = (x % 256 < 3 || y % 256 < 3) ? -40 : 0;
+        return [h, 224 + n + edge, 178 + n + edge, 32 + edge * 0.3, 0.55];
+      }, 3.0);
+      M.wall = std({ map: wall.map, normalMap: wall.normalMap, roughnessMap: wall.roughnessMap, normalScale: new THREE.Vector2(0.9, 0.9), vertexColors: true, roughness: 1, metalness: 0 });
+      M.floor = std({ map: floor.map, normalMap: floor.normalMap, roughnessMap: floor.roughnessMap, normalScale: new THREE.Vector2(0.7, 0.7), vertexColors: true, roughness: 1, metalness: 0, envMapIntensity: 0.7 });
+      M.ceil = std({ map: ceil.map, normalMap: ceil.normalMap, roughnessMap: ceil.roughnessMap, vertexColors: true, roughness: 1, metalness: 0 });
+      M.tact = std({ map: tact.map, normalMap: tact.normalMap, roughnessMap: tact.roughnessMap, roughness: 1, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
+      M.tdot = std({ map: tdot.map, normalMap: tdot.normalMap, roughnessMap: tdot.roughnessMap, roughness: 1, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
+      M.base = std({ color: 0x8f9494, roughness: 0.45, vertexColors: true });
+      M.alu = std({ color: 0xb9bdc0, roughness: 0.32, metalness: 0.75 });
+      M.dark = std({ color: 0x2a2c2e, roughness: 0.5, metalness: 0.3 });
+      M.steel = std({ color: 0xa7acad, roughness: 0.38, metalness: 0.6 });
+      M.door = std({ color: 0x9aa3a3, roughness: 0.42, metalness: 0.35 });
+      M.white = std({ color: 0xeef0f0, roughness: 0.5 });
+      M.black = std({ color: 0x0c0d0e, roughness: 0.25, metalness: 0.1 });
+    }
+
+    // =====================================================================
+    // textures: signage. Every lyric surface has a "normal" state and lyric states.
+    // =====================================================================
+    // -- yellow hanging exit sign (2.6 x 0.6 m)
+    const SW = 2048, SHh = 472;
+    function upArrow(g, x, y, s, color) {
+      g.fillStyle = color; g.beginPath();
+      g.moveTo(x, y - s * 0.5); g.lineTo(x + s * 0.42, y - s * 0.05); g.lineTo(x + s * 0.14, y - s * 0.05); g.lineTo(x + s * 0.14, y + s * 0.5);
+      g.lineTo(x - s * 0.14, y + s * 0.5); g.lineTo(x - s * 0.14, y - s * 0.05); g.lineTo(x - s * 0.42, y - s * 0.05); g.closePath(); g.fill();
+    }
+    function loopArrow(g, x, y, r, color) {
+      g.strokeStyle = color; g.lineWidth = r * 0.28; g.lineCap = "butt";
+      g.beginPath(); g.arc(x, y, r, -PI * 0.35, PI * 1.45); g.stroke();
+      const a = -PI * 0.35, ex = x + Math.cos(a) * r, ey = y + Math.sin(a) * r;
+      g.fillStyle = color; g.beginPath();
+      g.moveTo(ex + r * 0.42, ey + r * 0.05); g.lineTo(ex - r * 0.3, ey - r * 0.32); g.lineTo(ex - r * 0.2, ey + r * 0.46); g.closePath(); g.fill();
+    }
+    function yellowBase(g) {
+      const gr = g.createLinearGradient(0, 0, 0, SHh); gr.addColorStop(0, "#f7d52a"); gr.addColorStop(1, "#efc81a");
+      g.fillStyle = gr; g.fillRect(0, 0, SW, SHh);
+      g.fillStyle = "rgba(0,0,0,0.08)"; g.fillRect(0, 0, SW, 10); g.fillRect(0, SHh - 10, SW, 10);
+    }
+    function numBox(g, s, x) { rr(g, x, 70, 300, 332, 26, "#141414"); txt(g, s, x + 150, 365, 330, F.lat, "#f5d020", 260, "center", "700"); }
+    function signNormal(n, arrow = "up") {
+      const [c, g] = C(SW, SHh); yellowBase(g);
+      if (arrow === "up") upArrow(g, 220, 236, 330, "#151515"); else loopArrow(g, 220, 236, 120, "#151515");
+      txt(g, "出口", 470, 300, 230, F.jp, "#151515", 600, "left");
+      txt(g, "Exit", 1000, 300, 170, F.lat, "#151515", 400, "left", "600");
+      if (n !== null) numBox(g, String(n), 1660);
+      return TX(c);
+    }
+    function signLyric1(row, n, arrow = "up") {
+      const [c, g] = C(SW, SHh); yellowBase(g);
+      if (arrow === "up") upArrow(g, 200, 236, 300, "#151515");
+      txt(g, row, 1010, 310, 240, F.jp, "#151515", 1230, "center");
+      if (n !== null) numBox(g, String(n), 1660);
+      return TX(c);
+    }
+    function signLyric2(r1, r2, icon) {
+      const [c, g] = C(SW, SHh); yellowBase(g);
+      let cx = 1024, mw = 1800;
+      if (icon === "loop") { loopArrow(g, 230, 236, 120, "#151515"); cx = 1130; mw = 1520; }
+      if (icon === "q") { numBox(g, "?", 1660); cx = 820; mw = 1440; }
+      const s = fitSize(g, [r1, r2], 170, F.jp, mw);
+      txt(g, r1, cx, 215, s, F.jp, "#151515"); txt(g, r2, cx, 410, s, F.jp, "#151515");
+      return TX(c);
+    }
+    function signQuestion() {
+      const [c, g] = C(SW, SHh); yellowBase(g);
+      txt(g, "вот это вопрос", 820, 300, 200, F.jp, "#151515", 1440);
+      numBox(g, "?", 1660);
+      return TX(c);
+    }
+
+    // -- missing person notice (1.03 x 1.456 m)
+    function headPath(g, cx, cy, k) {
+      g.beginPath();
+      g.moveTo(cx - 120 * k, cy + 220 * k);
+      g.bezierCurveTo(cx - 128 * k, cy + 120 * k, cx - 196 * k, cy + 60 * k, cx - 186 * k, cy - 60 * k);
+      g.bezierCurveTo(cx - 176 * k, cy - 210 * k, cx - 20 * k, cy - 258 * k, cx + 82 * k, cy - 196 * k);
+      g.bezierCurveTo(cx + 150 * k, cy - 156 * k, cx + 166 * k, cy - 84 * k, cx + 152 * k, cy - 40 * k);
+      g.lineTo(cx + 190 * k, cy + 30 * k); g.lineTo(cx + 152 * k, cy + 48 * k); g.lineTo(cx + 162 * k, cy + 76 * k); g.lineTo(cx + 146 * k, cy + 92 * k);
+      g.bezierCurveTo(cx + 152 * k, cy + 132 * k, cx + 112 * k, cy + 152 * k, cx + 62 * k, cy + 152 * k);
+      g.lineTo(cx + 42 * k, cy + 220 * k); g.closePath();
+    }
+    function maze(g, x0, y0, cols, rows, cell, seed, color, lw) {
+      const r = mulberry32(seed), vis = new Uint8Array(cols * rows), wallsR = new Uint8Array(cols * rows).fill(1), wallsB = new Uint8Array(cols * rows).fill(1);
+      const st = [0]; vis[0] = 1;
+      while (st.length) {
+        const c = st[st.length - 1], cx = c % cols, cy = Math.floor(c / cols), nb = [];
+        if (cx > 0 && !vis[c - 1]) nb.push([c - 1, "L"]); if (cx < cols - 1 && !vis[c + 1]) nb.push([c + 1, "R"]);
+        if (cy > 0 && !vis[c - cols]) nb.push([c - cols, "U"]); if (cy < rows - 1 && !vis[c + cols]) nb.push([c + cols, "D"]);
+        if (!nb.length) { st.pop(); continue; }
+        const [n, d] = nb[Math.floor(r() * nb.length)];
+        if (d === "R") wallsR[c] = 0; if (d === "L") wallsR[n] = 0; if (d === "D") wallsB[c] = 0; if (d === "U") wallsB[n] = 0;
+        vis[n] = 1; st.push(n);
+      }
+      g.strokeStyle = color; g.lineWidth = lw; g.lineCap = "square"; g.beginPath();
+      for (let y = 0; y < rows; y++) for (let x = 0; x < cols; x++) {
+        const i = y * cols + x, px = x0 + x * cell, py = y0 + y * cell;
+        if (wallsR[i]) { g.moveTo(px + cell, py); g.lineTo(px + cell, py + cell); }
+        if (wallsB[i]) { g.moveTo(px, py + cell); g.lineTo(px + cell, py + cell); }
+      }
+      g.moveTo(x0, y0); g.lineTo(x0 + cols * cell, y0); g.moveTo(x0, y0); g.lineTo(x0, y0 + rows * cell);
+      g.stroke();
+    }
+    function texMissing() {
+      const W = 1024, Hh = 1448, [c, g] = C(W, Hh), r = mulberry32(5);
+      paper(g, W, Hh, "#f6f4ee", r, 5);
+      g.fillStyle = "#c22a2c"; g.fillRect(0, 0, W, 210);
+      txt(g, "探しています", W / 2, 150, 120, F.jp, "#ffffff", 900);
+      const s = fitSize(g, ["я потерялся", "в своей голове"], 190, F.jp, 970);
+      txt(g, "я потерялся", W / 2, 400, s, F.jp, "#141414");
+      txt(g, "в своей голове", W / 2, 400 + s * 1.1, s, F.jp, "#141414");
+      // photo
+      const px = 252, py = 690, pw = 520, ph = 480;
+      const pg = g.createLinearGradient(0, py, 0, py + ph); pg.addColorStop(0, "#c9cdcc"); pg.addColorStop(1, "#aeb3b3");
+      g.fillStyle = pg; g.fillRect(px, py, pw, ph);
+      g.save(); g.beginPath(); g.rect(px, py, pw, ph); g.clip();
+      headPath(g, px + pw / 2 - 10, py + ph / 2 + 40, 1.05); g.fillStyle = "#2b2e30"; g.fill();
+      g.save(); headPath(g, px + pw / 2 - 10, py + ph / 2 + 40, 1.05); g.clip();
+      maze(g, px + 40, py + 40, 20, 17, 26, 9, "#d9dcdc", 5);
+      g.fillStyle = "#d8262a"; g.beginPath(); g.arc(px + 40 + 26 * 9.5, py + 40 + 26 * 8.5, 9, 0, 2 * PI); g.fill();
+      g.restore(); g.restore();
+      g.strokeStyle = "#1b1b1b"; g.lineWidth = 3; g.strokeRect(px, py, pw, ph);
+      // small print
+      txt(g, "お心当たりの方は駅係員までお知らせください", W / 2, 1250, 38, F.jpm, "#333", 900);
+      bars(g, 120, 1290, 780, 3, 14, 16, "#9a9a9a", r);
+      return TX(c);
+    }
+
+    // -- help panel (1.0 x 0.75)
+    function texHelp(lyric) {
+      const W = 1024, Hh = 768, [c, g] = C(W, Hh), r = mulberry32(7);
+      paper(g, W, Hh, "#f4f6f7", r, 3);
+      g.fillStyle = "#1f5aa6"; g.fillRect(0, 0, W, 170);
+      g.fillStyle = "#fff"; g.beginPath(); g.arc(100, 85, 54, 0, 2 * PI); g.fill();
+      txt(g, "?", 100, 118, 90, F.lat, "#1f5aa6", 200, "center", "700");
+      txt(g, "お困りのお客様へ", 190, 118, 80, F.jp, "#ffffff", 780, "left");
+      if (lyric) {
+        const s = fitSize(g, ["ну кто же", "мне поможет"], 160, F.jp, 900);
+        txt(g, "ну кто же", W / 2, 360, s, F.jp, "#14243b");
+        txt(g, "мне поможет", W / 2, 360 + s * 1.15, s, F.jp, "#14243b");
+      } else {
+        txt(g, "インターホン", W / 2, 360, 140, F.jp, "#14243b", 900);
+        txt(g, "Intercom", W / 2, 500, 90, F.lat, "#14243b", 900, "center", "500");
+      }
+      g.fillStyle = "#1f5aa6"; g.fillRect(0, Hh - 70, W, 70);
+      txt(g, "係員とお話しできます", W / 2, Hh - 22, 40, F.jpm, "#fff", 900);
+      return TX(c);
+    }
+
+    // -- warning sticker (0.4 x 0.4) and the big notice board
+    function probIcon(g, cx, cy, R) {
+      g.fillStyle = "#1a1a1a";
+      g.beginPath(); g.arc(cx, cy - R * 0.18, R * 0.36, 0, 2 * PI); g.fill();
+      g.beginPath(); g.ellipse(cx, cy + R * 0.62, R * 0.58, R * 0.42, 0, PI, 2 * PI); g.fill();
+      g.strokeStyle = "#f4f4f0"; g.lineWidth = R * 0.05; g.beginPath();
+      for (let i = 0; i < 60; i++) { const a = i * 0.55, rr2 = R * 0.04 + i * R * 0.0045; const x = cx + Math.cos(a) * rr2, y = cy - R * 0.18 + Math.sin(a) * rr2 * 0.9; if (i) g.lineTo(x, y); else g.moveTo(x, y); }
+      g.stroke();
+      g.strokeStyle = "#d42a26"; g.lineWidth = R * 0.16;
+      g.beginPath(); g.arc(cx, cy, R, 0, 2 * PI); g.stroke();
+      g.beginPath(); g.moveTo(cx - R * 0.7, cy - R * 0.7); g.lineTo(cx + R * 0.7, cy + R * 0.7); g.stroke();
+    }
+    function texSticker() {
+      const W = 512, [c, g] = C(W, W), r = mulberry32(3);
+      paper(g, W, W, "#f7f7f3", r, 4);
+      g.strokeStyle = "#cfcfca"; g.lineWidth = 6; g.strokeRect(3, 3, W - 6, W - 6);
+      probIcon(g, W / 2, 175, 118);
+      const s = fitSize(g, ["столько", "проблем"], 96, F.jp, 440);
+      txt(g, "столько", W / 2, 380, s, F.jp, "#151515");
+      txt(g, "проблем", W / 2, 380 + s * 1.08, s, F.jp, "#151515");
+      return TX(c);
+    }
+    const NOTICE_ROWS = ["столько", "проблем", "сейчас в моей", "бошке"];
+    function texNotice(stage) {
+      // stage 0: rows 1–2; 1: +сейчас; 2: +в; 3: +моей; 4: +бошке
+      const W = 1024, Hh = 1434, [c, g] = C(W, Hh), r = mulberry32(17);
+      paper(g, W, Hh, "#f9f9f6", r, 4);
+      g.fillStyle = "#1c4f93"; g.fillRect(0, 0, W, 190);
+      txt(g, "お知らせ", W / 2, 135, 110, F.jp, "#fff", 800);
+      probIcon(g, W / 2, 330, 95);
+      const s = fitSize(g, NOTICE_ROWS, 175, F.jp, 940);
+      txt(g, NOTICE_ROWS[0], W / 2, 600, s, F.jp, "#141414");
+      txt(g, NOTICE_ROWS[1], W / 2, 600 + s * 1.12, s, F.jp, "#141414");
+      const n3 = clamp(stage, 0, 3);
+      rowPrefix(g, NOTICE_ROWS[2], n3, W / 2, 600 + s * 2.4, s, F.jp, "#c32020");
+      if (stage >= 4) txt(g, NOTICE_ROWS[3], W / 2, 600 + s * 3.52, s, F.jp, "#c32020");
+      g.fillStyle = "#1c4f93"; g.fillRect(0, Hh - 110, W, 6);
+      bars(g, 80, Hh - 84, 560, 2, 14, 14, "#9c9c9c", r);
+      txt(g, "駅長", W - 90, Hh - 40, 52, F.jp, "#333", 300, "right");
+      return TX(c);
+    }
+
+    // -- floor marking (2.4 x 2.4)
+    function texCircle() {
+      const W = 1024, [c, g] = C(W, W), r = mulberry32(31);
+      const Y = "#e9c21f";
+      g.strokeStyle = Y; g.lineWidth = 58;
+      g.beginPath(); g.arc(W / 2, W / 2, 430, -PI * 0.3, PI * 1.5); g.stroke();
+      const a = -PI * 0.3, ex = W / 2 + Math.cos(a) * 430, ey = W / 2 + Math.sin(a) * 430;
+      g.fillStyle = Y; g.beginPath(); g.moveTo(ex + 120, ey + 30); g.lineTo(ex - 70, ey - 110); g.lineTo(ex - 50, ey + 130); g.closePath(); g.fill();
+      const s = fitSize(g, ["с этого", "круга"], 220, F.jp, 640);
+      txt(g, "с этого", W / 2, 480, s, F.jp, Y);
+      txt(g, "круга", W / 2, 480 + s * 1.12, s, F.jp, Y);
+      // worn paint
+      g.globalCompositeOperation = "destination-out";
+      for (let i = 0; i < 1400; i++) { g.globalAlpha = 0.15 + r() * 0.35; g.beginPath(); g.arc(r() * W, r() * W, 1 + r() * 4, 0, 2 * PI); g.fill(); }
+      g.globalAlpha = 1; g.globalCompositeOperation = "source-over";
+      return TX(c);
+    }
+
+    // -- LED dot-matrix board (1.8 x 0.9)
+    function texLED(r1, r2, n1, n2, colorLit = [255, 166, 40]) {
+      const MW = 224, MH = 112, [mc, mg] = C(MW, MH);
+      mg.fillStyle = "#000"; mg.fillRect(0, 0, MW, MH);
+      const s = fitSize(mg, [r1, r2].filter(Boolean), 42, F.jp, 214);
+      if (r1) rowPrefix(mg, r1, n1, MW / 2, 47, s, F.jp, "#fff");
+      if (r2) rowPrefix(mg, r2, n2, MW / 2, 101, s, F.jp, "#fff");
+      const md = mg.getImageData(0, 0, MW, MH).data;
+      const W = 2048, Hh = 1024, [c, g] = C(W, Hh), p = W / MW;
+      g.fillStyle = "#0a0a0a"; g.fillRect(0, 0, W, Hh);
+      const lit = `rgb(${colorLit[0]},${colorLit[1]},${colorLit[2]})`;
+      for (let y = 0; y < MH; y++) for (let x = 0; x < MW; x++) {
+        const on = md[(y * MW + x) * 4] > 100;
+        g.fillStyle = on ? lit : "#251a0e"; g.beginPath(); g.arc((x + 0.5) * p, (y + 0.5) * p, on ? p * 0.42 : p * 0.36, 0, 2 * PI); g.fill();
+      }
+      return TX(c);
+    }
+
+    // -- station clock (face, 0.46 m)
+    function texClock(hh, mm) {
+      const W = 512, [c, g] = C(W, W), cx = W / 2;
+      g.fillStyle = "#f5f5f2"; g.beginPath(); g.arc(cx, cx, 250, 0, 2 * PI); g.fill();
+      for (let i = 0; i < 60; i++) {
+        const a = (i / 60) * 2 * PI, big = i % 5 === 0;
+        g.strokeStyle = "#151515"; g.lineWidth = big ? 14 : 4; g.beginPath();
+        g.moveTo(cx + Math.sin(a) * (big ? 190 : 214), cx - Math.cos(a) * (big ? 190 : 214)); g.lineTo(cx + Math.sin(a) * 232, cx - Math.cos(a) * 232); g.stroke();
+      }
+      const ha = ((hh % 12) / 12 + mm / 720) * 2 * PI, ma = (mm / 60) * 2 * PI;
+      g.lineCap = "butt"; g.strokeStyle = "#111";
+      g.lineWidth = 20; g.beginPath(); g.moveTo(cx - Math.sin(ha) * 30, cx + Math.cos(ha) * 30); g.lineTo(cx + Math.sin(ha) * 130, cx - Math.cos(ha) * 130); g.stroke();
+      g.lineWidth = 12; g.beginPath(); g.moveTo(cx - Math.sin(ma) * 36, cx + Math.cos(ma) * 36); g.lineTo(cx + Math.sin(ma) * 205, cx - Math.cos(ma) * 205); g.stroke();
+      g.fillStyle = "#111"; g.beginPath(); g.arc(cx, cx, 16, 0, 2 * PI); g.fill();
+      return TX(c);
+    }
+
+    // -- digital signage (0.95 x 1.69, portrait)
+    const SCRW = 720, SCRH = 1280;
+    const FEED = { x: 56, y: 760, w: 608, h: 342 };
+    function texAdDrink() {
+      const [c, g] = C(SCRW, SCRH), r = mulberry32(41);
+      const gr = g.createLinearGradient(0, 0, 0, SCRH); gr.addColorStop(0, "#d9ecd6"); gr.addColorStop(1, "#6fae74");
+      g.fillStyle = gr; g.fillRect(0, 0, SCRW, SCRH);
+      g.fillStyle = "rgba(255,255,255,0.35)"; g.beginPath(); g.arc(520, 260, 260, 0, 2 * PI); g.fill();
+      rr(g, 250, 420, 220, 620, 60, "#2f7a3e"); rr(g, 300, 360, 120, 90, 20, "#e8e8e0"); rr(g, 262, 600, 196, 240, 10, "#f3f1e4");
+      txt(g, "緑茶", 360, 760, 110, F.jp, "#2f7a3e", 180);
+      txt(g, "新発売", SCRW / 2, 200, 140, F.jp, "#1f4d29", 600);
+      txt(g, "すっきり、ひとやすみ。", SCRW / 2, 1150, 52, F.jp, "#ffffff", 640);
+      bars(g, 150, 1190, 420, 1, 12, 10, "rgba(255,255,255,0.6)", r);
+      return TX(c);
+    }
+    function planeIcon(g, cx, cy, s, color) {
+      g.fillStyle = color; g.beginPath();
+      g.moveTo(cx - s, cy - s * 0.05); g.lineTo(cx + s, cy - s * 0.75); g.lineTo(cx + s * 0.55, cy + s * 0.8); g.lineTo(cx + s * 0.05, cy + s * 0.35); g.lineTo(cx - s * 0.2, cy + s * 0.75); g.lineTo(cx - s * 0.18, cy + s * 0.22); g.closePath(); g.fill();
+    }
+    function texChannel(nWords) {
+      const [c, g] = C(SCRW, SCRH), r = mulberry32(43);
+      // chat wallpaper
+      g.fillStyle = "#cfdcc4"; g.fillRect(0, 0, SCRW, SCRH);
+      g.strokeStyle = "rgba(90,120,80,0.12)"; g.lineWidth = 3;
+      for (let i = 0; i < 70; i++) { const x = r() * SCRW, y = r() * SCRH; g.beginPath(); g.arc(x, y, 8 + r() * 14, 0, 2 * PI); g.stroke(); }
+      // header bar: back chevron, avatar with paper plane, placeholder title bars, bell
+      g.fillStyle = "#2f6ea5"; g.fillRect(0, 0, SCRW, 130);
+      g.strokeStyle = "#fff"; g.lineWidth = 8; g.beginPath(); g.moveTo(48, 40); g.lineTo(26, 65); g.lineTo(48, 90); g.stroke();
+      const ag = g.createLinearGradient(80, 25, 160, 105); ag.addColorStop(0, "#6ab3f3"); ag.addColorStop(1, "#2a8fd6");
+      g.fillStyle = ag; g.beginPath(); g.arc(120, 65, 42, 0, 2 * PI); g.fill();
+      planeIcon(g, 118, 66, 24, "#fff");
+      rr(g, 184, 38, 220, 22, 10, "rgba(255,255,255,0.9)"); rr(g, 184, 74, 140, 16, 8, "rgba(255,255,255,0.55)");
+      g.strokeStyle = "#fff"; g.lineWidth = 6; g.beginPath(); g.arc(660, 62, 18, PI, 0); g.lineTo(682, 82); g.lineTo(638, 82); g.closePath(); g.stroke();
+      // the post: lyric text
+      rr(g, 40, 170, SCRW - 80, 520, 26, "#ffffff");
+      rr(g, 40, 170, 10, 520, 5, "#2f6ea5");
+      const s = fitSize(g, ["мониторю", "твой канал"], 150, F.jp, 580);
+      rowPrefix(g, "мониторю", Math.min(nWords, 1), SCRW / 2 + 5, 380, s, F.jp, "#16212c");
+      rowPrefix(g, "твой канал", Math.max(0, nWords - 1), SCRW / 2 + 5, 380 + s * 1.15, s, F.jp, "#16212c");
+      // the next post: live camera (feed is a separate mesh over this rect) + placeholder lines
+      rr(g, 40, 730, SCRW - 80, 470, 26, "#ffffff");
+      g.fillStyle = "#111"; g.fillRect(FEED.x, FEED.y, FEED.w, FEED.h);
+      bars(g, 70, 1125, 520, 2, 14, 14, "#c3c9cf", r);
+      g.fillStyle = "#e0312b"; g.beginPath(); g.arc(FEED.x + 30, FEED.y + 30, 11, 0, 2 * PI); g.fill();
+      // bottom bar (mute button as a plain bar)
+      g.fillStyle = "#ffffff"; g.fillRect(0, SCRH - 64, SCRW, 64); rr(g, SCRW / 2 - 90, SCRH - 44, 180, 22, 11, "#7fb3e0");
+      return TX(c);
+    }
+
+    // -- payphone sign (1.2 x 0.48)
+    function phoneIcon(g, cx, cy, s, color) {
+      g.fillStyle = color;
+      g.beginPath(); g.roundRect(cx - s, cy - s * 0.25, s * 2, s * 0.5, s * 0.25); g.fill();
+      g.beginPath(); g.roundRect(cx - s * 0.6, cy + s * 0.1, s * 1.2, s * 0.9, s * 0.12); g.fill();
+      g.fillStyle = "#ffffff"; g.beginPath(); g.arc(cx, cy + s * 0.55, s * 0.22, 0, 2 * PI); g.fill();
+    }
+    function texPhoneSign(lyric) {
+      const W = 1280, Hh = 512, [c, g] = C(W, Hh), r = mulberry32(51);
+      paper(g, W, Hh, "#f6f7f5", r, 3);
+      g.fillStyle = "#1f8a4c"; g.fillRect(0, 0, 330, Hh);
+      phoneIcon(g, 165, 220, 110, "#ffffff");
+      if (lyric) {
+        const s = fitSize(g, ["звонка", "от тя жду"], 190, F.jp, 860);
+        txt(g, "звонка", 800, 225, s, F.jp, "#132a1d");
+        txt(g, "от тя жду", 800, 225 + s * 1.1, s, F.jp, "#132a1d");
+      } else {
+        txt(g, "公衆電話", 800, 270, 190, F.jp, "#132a1d", 860);
+        txt(g, "Public Telephone", 800, 400, 90, F.lat, "#132a1d", 860, "center", "500");
+      }
+      return TX(c);
+    }
+    function texPhoneFace() {
+      const [c, g] = C(256, 512);
+      g.fillStyle = "#2f9150"; g.fillRect(0, 0, 256, 512);
+      rr(g, 40, 40, 176, 70, 8, "#9fb59a", "#1d4d2c", 4);
+      for (let y = 0; y < 4; y++) for (let x = 0; x < 3; x++) rr(g, 52 + x * 56, 150 + y * 56, 40, 40, 6, "#e9ece4", "#3b5a43", 2);
+      rr(g, 70, 400, 116, 16, 6, "#1b1b1b"); rr(g, 70, 440, 116, 40, 6, "#1d4d2c");
+      return TX(c);
+    }
+
+    // -- eyes (for the eye-drop / sleep posters)
+    function eye(g, cx, cy, w, open, iris, skin) {
+      const h = w * 0.42;
+      const upY = cy - h * open, loY = cy + h * 0.55;
+      g.save();
+      g.beginPath(); g.moveTo(cx - w / 2, cy); g.quadraticCurveTo(cx, upY - h * 0.3 * open, cx + w / 2, cy); g.quadraticCurveTo(cx, loY, cx - w / 2, cy); g.closePath();
+      g.fillStyle = "#f2efe9"; g.fill(); g.clip();
+      g.fillStyle = iris; g.beginPath(); g.arc(cx, cy - h * 0.05, h * 0.62, 0, 2 * PI); g.fill();
+      g.fillStyle = "#0d0d0d"; g.beginPath(); g.arc(cx, cy - h * 0.05, h * 0.28, 0, 2 * PI); g.fill();
+      g.fillStyle = "rgba(255,255,255,0.85)"; g.beginPath(); g.arc(cx + h * 0.18, cy - h * 0.25, h * 0.1, 0, 2 * PI); g.fill();
+      g.restore();
+      // upper lid skin & crease
+      g.fillStyle = skin; g.beginPath(); g.moveTo(cx - w / 2 - 4, cy); g.quadraticCurveTo(cx, upY - h * 0.3 * open, cx + w / 2 + 4, cy);
+      g.lineTo(cx + w / 2 + 4, cy - h * 2.2); g.lineTo(cx - w / 2 - 4, cy - h * 2.2); g.closePath(); g.fill();
+      g.strokeStyle = "rgba(60,40,30,0.85)"; g.lineWidth = w * 0.03; g.beginPath(); g.moveTo(cx - w / 2, cy); g.quadraticCurveTo(cx, upY - h * 0.3 * open, cx + w / 2, cy); g.stroke();
+      g.strokeStyle = "rgba(90,60,45,0.35)"; g.lineWidth = w * 0.015; g.beginPath(); g.moveTo(cx - w * 0.42, cy - h * 0.4); g.quadraticCurveTo(cx, upY - h * 0.9 - h * 0.3 * open, cx + w * 0.44, cy - h * 0.35); g.stroke();
+      g.strokeStyle = "#1e1612"; g.lineWidth = w * 0.012;
+      for (let i = 0; i < 9; i++) { const u = 0.15 + (i / 8) * 0.7, x = cx - w / 2 + u * w, y = cy + (upY - h * 0.3 * open - cy) * 2 * u * (1 - u) * 1.0; g.beginPath(); g.moveTo(x, y); g.lineTo(x + (u - 0.5) * w * 0.12, y - w * 0.07 * (open > 0.3 ? 1 : 0.4) + (open > 0.3 ? 0 : w * 0.09)); g.stroke(); }
+    }
+    function lightboxBase(g, W, Hh, top, bot) { const gr = g.createLinearGradient(0, 0, 0, Hh); gr.addColorStop(0, top); gr.addColorStop(1, bot); g.fillStyle = gr; g.fillRect(0, 0, W, Hh); }
+    const PW = 1024, PH = 1450;
+    function texP1(lyric) {
+      const [c, g] = C(PW, PH), r = mulberry32(61);
+      if (!lyric) {
+        lightboxBase(g, PW, PH, "#e6f4f8", "#9fd0e0");
+        g.fillStyle = "#f0d9c8"; g.fillRect(0, 300, PW, 420);
+        eye(g, 300, 520, 330, 1.0, "#5d7f9a", "#f0d9c8"); eye(g, 724, 520, 330, 1.0, "#5d7f9a", "#f0d9c8");
+        txt(g, "瞳、すっきり。", PW / 2, 180, 120, F.jp, "#0f4c6b", 900);
+        rr(g, 380, 860, 260, 380, 40, "#ffffff", "#7fb6c9", 6); rr(g, 450, 790, 120, 90, 20, "#3c8fb3");
+        txt(g, "目薬", PW / 2, 1100, 90, F.jp, "#0f4c6b", 240);
+        txt(g, "ドラッグストアで", PW / 2, 1360, 56, F.jpm, "#0f4c6b", 800);
+      } else {
+        lightboxBase(g, PW, PH, "#c6d3d6", "#6e8590");
+        g.fillStyle = "#d9c3b3"; g.fillRect(0, 640, PW, 420);
+        eye(g, 300, 860, 330, 0.22, "#4b6276", "#cdb3a2"); eye(g, 724, 860, 330, 0.16, "#4b6276", "#cdb3a2");
+        const s = fitSize(g, ["глаза", "слипаются"], 210, F.jp, 920);
+        txt(g, "глаза", PW / 2, 260, s, F.jp, "#0e2a38");
+        txt(g, "слипаются", PW / 2, 260 + s * 1.12, s, F.jp, "#0e2a38");
+        txt(g, "目薬", PW / 2, 1300, 70, F.jp, "#0e2a38", 240);
+      }
+      return TX(c);
+    }
+    function texP2(lyric) {
+      const [c, g] = C(PW, PH), r = mulberry32(62);
+      if (!lyric) {
+        lightboxBase(g, PW, PH, "#7cc3f0", "#e8f4fb");
+        g.fillStyle = "#7f9cb0"; g.beginPath(); g.moveTo(0, 900); g.lineTo(260, 620); g.lineTo(480, 820); g.lineTo(700, 560); g.lineTo(PW, 860); g.lineTo(PW, PH); g.lineTo(0, PH); g.fill();
+        g.fillStyle = "#5e7d63"; g.fillRect(0, 960, PW, 490);
+        rr(g, 120, 1010, 780, 120, 40, "#f2f2f2"); g.fillStyle = "#2b6cb0"; g.fillRect(120, 1080, 780, 18);
+        for (let i = 0; i < 9; i++) rr(g, 160 + i * 82, 1030, 56, 40, 6, "#40576b");
+        txt(g, "週末、遠くへ。", PW / 2, 260, 130, F.jp, "#ffffff", 900);
+        txt(g, "Rail Trip 2026", PW / 2, 360, 70, F.lat, "#ffffff", 900, "center", "500");
+        bars(g, 160, 1260, 700, 2, 14, 14, "rgba(255,255,255,0.8)", r);
+      } else {
+        lightboxBase(g, PW, PH, "#0b1424", "#25324a");
+        g.fillStyle = "#1a2433"; g.beginPath(); g.moveTo(0, 900); g.lineTo(260, 620); g.lineTo(480, 820); g.lineTo(700, 560); g.lineTo(PW, 860); g.lineTo(PW, PH); g.lineTo(0, PH); g.fill();
+        g.fillStyle = "#121a24"; g.fillRect(0, 960, PW, 490);
+        // a lit doorway in the dark field
+        const dg = g.createLinearGradient(0, 760, 0, 1180); dg.addColorStop(0, "#fff6d8"); dg.addColorStop(1, "#ffd27a");
+        g.fillStyle = dg; g.fillRect(452, 760, 120, 240);
+        g.fillStyle = "rgba(255,220,140,0.18)"; g.beginPath(); g.moveTo(452, 1000); g.lineTo(572, 1000); g.lineTo(700, 1300); g.lineTo(324, 1300); g.fill();
+        const s = fitSize(g, ["я скоро", "попаду"], 220, F.jp, 920);
+        txt(g, "я скоро", PW / 2, 280, s, F.jp, "#f3f1ea");
+        txt(g, "попаду", PW / 2, 280 + s * 1.12, s, F.jp, "#f3f1ea");
+      }
+      return TX(c);
+    }
+    function texP3(lyric) {
+      const [c, g] = C(PW, PH), r = mulberry32(63);
+      if (!lyric) {
+        lightboxBase(g, PW, PH, "#f4ede2", "#e1d3bf");
+        rr(g, 130, 820, 764, 230, 30, "#ffffff", "#c9b9a2", 4); rr(g, 170, 760, 260, 110, 50, "#f7f3ec", "#c9b9a2", 4); rr(g, 120, 1040, 784, 40, 10, "#a58d6d");
+        g.fillStyle = "#e4c27a"; g.beginPath(); g.arc(800, 400, 90, 0, 2 * PI); g.fill();
+        txt(g, "快眠マットレス", PW / 2, 230, 110, F.jp, "#4c3a26", 900);
+        txt(g, "ぐっすり、朝まで。", PW / 2, 1240, 70, F.jp, "#4c3a26", 900);
+        bars(g, 200, 1300, 620, 2, 14, 14, "#a8987f", r);
+      } else {
+        lightboxBase(g, PW, PH, "#0a1636", "#26346a");
+        for (let i = 0; i < 160; i++) { g.fillStyle = `rgba(255,255,255,${0.3 + r() * 0.7})`; g.beginPath(); g.arc(r() * PW, r() * 900, 1 + r() * 3, 0, 2 * PI); g.fill(); }
+        g.fillStyle = "#f6e7b0"; g.beginPath(); g.arc(760, 640, 120, 0, 2 * PI); g.fill();
+        g.fillStyle = "#0e1b40"; g.beginPath(); g.arc(810, 600, 110, 0, 2 * PI); g.fill();
+        g.fillStyle = "rgba(220,226,255,0.85)";
+        for (const [x, y, s2] of [[220, 1020, 1], [520, 1060, 1.3], [800, 1010, 0.9]]) { for (let k = 0; k < 4; k++) { g.beginPath(); g.arc(x + (k - 1.5) * 60 * s2, y - (k % 2) * 30 * s2, 70 * s2, 0, 2 * PI); g.fill(); } }
+        rr(g, 300, 920, 424, 110, 26, "#ffffff"); rr(g, 330, 880, 150, 60, 28, "#eef0ff");
+        const s = fitSize(g, ["в царство", "снов"], 240, F.jp, 920);
+        txt(g, "в царство", PW / 2, 290, s, F.jp, "#f5f1ff");
+        txt(g, "снов", PW / 2, 290 + s * 1.12, s, F.jp, "#f5f1ff");
+        txt(g, "快眠マットレス", PW / 2, 1330, 64, F.jp, "#cbd2ff", 900);
+      }
+      return TX(c);
+    }
+    // -- generic posters (no lyrics)
+    function texStaff() {
+      const [c, g] = C(PW, PH), r = mulberry32(71);
+      paper(g, PW, PH, "#f7f8fa", r, 3);
+      g.fillStyle = "#0f7a63"; g.fillRect(0, 0, PW, 380);
+      txt(g, "駅スタッフ", PW / 2, 190, 150, F.jp, "#fff", 900); txt(g, "募集中", PW / 2, 330, 120, F.jp, "#fff", 900);
+      g.fillStyle = "#0f7a63"; g.beginPath(); g.arc(PW / 2, 560, 90, 0, 2 * PI); g.fill(); rr(g, PW / 2 - 150, 660, 300, 330, 80, "#0f7a63");
+      rr(g, 90, 1060, 844, 260, 20, "#e8f2ef");
+      bars(g, 130, 1100, 760, 5, 16, 24, "#7b8f89", r);
+      txt(g, "未経験歓迎", PW / 2, 1400, 64, F.jp, "#0f7a63", 800);
+      return TX(c);
+    }
+    function texExhibit() {
+      const [c, g] = C(PW, PH), r = mulberry32(72);
+      paper(g, PW, PH, "#ebe7df", r, 4);
+      const cols = ["#c96b4b", "#3e6e8e", "#d9a441", "#2f2f2f"];
+      for (let i = 0; i < 7; i++) { g.fillStyle = cols[i % 4]; g.globalAlpha = 0.85; g.beginPath(); g.arc(200 + r() * 620, 260 + r() * 640, 80 + r() * 160, 0, 2 * PI); g.fill(); }
+      g.globalAlpha = 1;
+      txt(g, "写真展 2026", 80, 1150, 110, F.jp, "#222", 860, "left");
+      txt(g, "PHOTO EXHIBITION", 80, 1240, 64, F.lat, "#222", 860, "left", "500");
+      bars(g, 80, 1290, 600, 3, 12, 14, "#8b8478", r);
+      return TX(c);
+    }
+    function texManners() {
+      const [c, g] = C(PW, PH), r = mulberry32(73);
+      paper(g, PW, PH, "#fff8e8", r, 3);
+      g.fillStyle = "#e05a1e"; g.fillRect(0, 0, PW, 300);
+      txt(g, "歩きスマホは", PW / 2, 150, 110, F.jp, "#fff", 900); txt(g, "やめましょう", PW / 2, 270, 110, F.jp, "#fff", 900);
+      g.fillStyle = "#333"; g.beginPath(); g.arc(PW / 2, 520, 70, 0, 2 * PI); g.fill(); rr(g, PW / 2 - 90, 600, 180, 330, 60, "#333");
+      rr(g, PW / 2 + 70, 640, 70, 120, 10, "#333");
+      g.strokeStyle = "#d42a26"; g.lineWidth = 40; g.beginPath(); g.arc(PW / 2, 700, 330, 0, 2 * PI); g.stroke();
+      g.beginPath(); g.moveTo(PW / 2 - 233, 467); g.lineTo(PW / 2 + 233, 933); g.stroke();
+      bars(g, 120, 1150, 780, 4, 16, 22, "#8a8170", r);
+      return TX(c);
+    }
+    function texEvac() {
+      const W = 1024, Hh = 768, [c, g] = C(W, Hh), r = mulberry32(74);
+      paper(g, W, Hh, "#fbfbf8", r, 3);
+      g.fillStyle = "#1c8a3f"; g.fillRect(0, 0, W, 110); txt(g, "避難経路図", W / 2, 80, 70, F.jp, "#fff", 800);
+      g.strokeStyle = "#333"; g.lineWidth = 8; g.strokeRect(120, 200, 780, 420);
+      g.fillStyle = "#ddd"; g.fillRect(124, 360, 772, 100);
+      g.strokeStyle = "#1c8a3f"; g.lineWidth = 14; g.beginPath(); g.moveTo(800, 410); g.lineTo(200, 410); g.stroke();
+      g.fillStyle = "#1c8a3f"; g.beginPath(); g.moveTo(160, 410); g.lineTo(220, 370); g.lineTo(220, 450); g.fill();
+      g.fillStyle = "#d42a26"; g.beginPath(); g.arc(640, 410, 22, 0, 2 * PI); g.fill(); txt(g, "現在地", 640, 520, 40, F.jp, "#d42a26", 300);
+      bars(g, 120, 660, 600, 2, 12, 14, "#999", r);
+      return TX(c);
+    }
+    function texPlate(s, w = 512, h = 128, bg = "#f2f2f0", fg = "#222") { const [c, g] = C(w, h); g.fillStyle = bg; g.fillRect(0, 0, w, h); txt(g, s, w / 2, h * 0.68, h * 0.5, F.jp, fg, w * 0.9); return TX(c); }
+    function texHydrant() {
+      const [c, g] = C(512, 680);
+      g.fillStyle = "#e5e3dd"; g.fillRect(0, 0, 512, 680);
+      g.strokeStyle = "#b9b6ae"; g.lineWidth = 8; g.strokeRect(20, 20, 472, 640);
+      g.fillStyle = "#cf2a24"; g.fillRect(60, 80, 392, 150); txt(g, "消火栓", 256, 185, 100, F.jp, "#fff", 360);
+      rr(g, 380, 330, 40, 120, 10, "#9a968c");
+      return TX(c);
+    }
+    function texVent() { const [c, g] = C(512, 256); g.fillStyle = "#cfd2d2"; g.fillRect(0, 0, 512, 256); for (let y = 16; y < 240; y += 22) { g.fillStyle = "#5b5f60"; g.fillRect(16, y, 480, 10); } return TX(c); }
+
+    // =====================================================================
+    // the man (white shirt, dark trousers, briefcase)
+    // =====================================================================
+    function texFace() {
+      const W = 512, Hh = 256, [c, g] = C(W, Hh), r = mulberry32(91);
+      const SK = "#c9a58c";
+      paper(g, W, Hh, SK, r, 6);
+      // hair: crown + back (u 0..1 around; face at u = 0.25)
+      g.fillStyle = "#1d1b1a"; g.fillRect(0, 0, W, 58);
+      g.fillRect(200, 0, W - 200 - 20, 140);
+      g.fillRect(0, 0, 40, 140);
+      g.fillStyle = SK; g.beginPath(); g.ellipse(128, 70, 62, 22, 0, 0, PI); g.fill();
+      // brows, eyes, nose shadow, mouth
+      const fx = 128;
+      g.fillStyle = "#2a2220"; g.fillRect(fx - 40, 92, 26, 5); g.fillRect(fx + 14, 92, 26, 5);
+      g.fillStyle = "#1a1515"; g.fillRect(fx - 34, 104, 16, 6); g.fillRect(fx + 18, 104, 16, 6);
+      g.fillStyle = "rgba(90,60,45,0.35)"; g.fillRect(fx - 4, 108, 8, 24);
+      g.fillStyle = "#7d5548"; g.fillRect(fx - 16, 146, 32, 4);
+      g.fillStyle = "rgba(60,50,45,0.18)"; g.fillRect(fx - 40, 150, 80, 30);
+      // ears
+      g.fillStyle = "#b8917a"; g.fillRect(fx - 72, 98, 10, 34); g.fillRect(fx + 62, 98, 10, 34);
+      return TX(c);
+    }
+    function buildPerson() {
+      const MAT = {
+        shirt: std({ color: 0xeceeee, roughness: 0.75 }),
+        trousers: std({ color: 0x24272b, roughness: 0.7 }),
+        shoes: std({ color: 0x0e0e0f, roughness: 0.3, metalness: 0.1 }),
+        skin: std({ color: 0xc9a58c, roughness: 0.6 }),
+        hair: std({ color: 0x1b1a19, roughness: 0.55 }),
+        face: std({ map: texFace(), roughness: 0.6 }),
+        belt: std({ color: 0x111111, roughness: 0.4 }),
+        bag: std({ color: 0x141414, roughness: 0.35, metalness: 0.05 }),
+      };
+      const P = {};
+      const root = new THREE.Group(); P.root = root;
+      const add = (geom, mat, parent, x = 0, y = 0, z = 0) => { const m = new THREE.Mesh(geom, mat); m.position.set(x, y, z); parent.add(m); return m; };
+      const lathe = (pts, seg = 28) => new THREE.LatheGeometry(pts.map(([r, y]) => new THREE.Vector2(r, y)), seg);
+      const cap = (r, len) => new THREE.CapsuleGeometry(r, len, 6, 16);
+      const ball = (r) => new THREE.SphereGeometry(r, 24, 16);
+      const hips = new THREE.Group(); hips.position.y = 0.95; root.add(hips); P.hips = hips;
+      add(lathe([[0.0, -0.12], [0.12, -0.11], [0.16, -0.04], [0.165, 0.05], [0.155, 0.1], [0.0, 0.1]]), MAT.trousers, hips).scale.z = 0.7;
+      add(new THREE.CylinderGeometry(0.158, 0.158, 0.035, 28), MAT.belt, hips, 0, 0.085, 0).scale.z = 0.7;
+      const spine = new THREE.Group(); spine.position.y = 0.08; hips.add(spine); P.spine = spine;
+      const torso = add(lathe([[0.0, -0.06], [0.16, -0.06], [0.175, 0.04], [0.17, 0.16], [0.185, 0.32], [0.2, 0.42], [0.19, 0.5], [0.14, 0.555], [0.06, 0.58], [0.0, 0.58]]), MAT.shirt, spine);
+      torso.scale.z = 0.66;
+      add(new THREE.CylinderGeometry(0.062, 0.085, 0.07, 20), MAT.shirt, spine, 0, 0.575, 0.0); // collar
+      for (const sx of [-1, 1]) add(ball(0.068), MAT.shirt, spine, 0.19 * sx, 0.48, 0).scale.set(1, 0.92, 0.95);
+      const neck = new THREE.Group(); neck.position.y = 0.58; spine.add(neck); P.neck = neck;
+      add(new THREE.CylinderGeometry(0.045, 0.05, 0.1, 16), MAT.skin, neck, 0, 0.03, 0);
+      const head = add(new THREE.SphereGeometry(0.1, 32, 24), MAT.face, neck, 0, 0.165, 0.005); head.scale.set(0.9, 1.15, 1.0); P.head = head;
+      const hair = add(new THREE.SphereGeometry(0.104, 32, 12, 0, PI * 2, 0, PI * 0.42), MAT.hair, neck, 0, 0.18, -0.012);
+      hair.scale.set(0.93, 1.1, 1.04); hair.rotation.x = -0.35;
+      function arm(side) {
+        const sh = new THREE.Group(); sh.position.set(0.205 * side, 0.48, 0); spine.add(sh);
+        add(cap(0.05, 0.22), MAT.shirt, sh, 0, -0.15, 0);
+        const el = new THREE.Group(); el.position.y = -0.3; sh.add(el);
+        add(ball(0.047), MAT.shirt, el);
+        add(cap(0.043, 0.19), MAT.shirt, el, 0, -0.13, 0);
+        const hand = new THREE.Group(); hand.position.y = -0.27; el.add(hand);
+        add(ball(0.042), MAT.skin, hand, 0, -0.03, 0.005).scale.set(0.75, 1.3, 0.55);
+        return { sh, el, hand };
+      }
+      const aL = arm(1), aR = arm(-1);
+      Object.assign(P, { shL: aL.sh, elL: aL.el, handL: aL.hand, shR: aR.sh, elR: aR.el, handR: aR.hand });
+      // briefcase in the right hand
+      const bag = new THREE.Group(); bag.position.set(0, -0.08, 0); aR.hand.add(bag);
+      add(new THREE.BoxGeometry(0.1, 0.3, 0.42), MAT.bag, bag, 0, -0.17, 0);
+      add(new THREE.TorusGeometry(0.035, 0.008, 6, 14, PI), MAT.bag, bag, 0, -0.015, 0).rotation.y = PI / 2;
+      function leg(side) {
+        const th = new THREE.Group(); th.position.set(0.088 * side, -0.05, 0); hips.add(th);
+        add(cap(0.074, 0.3), MAT.trousers, th, 0, -0.21, 0);
+        const kn = new THREE.Group(); kn.position.y = -0.43; th.add(kn);
+        add(ball(0.063), MAT.trousers, kn);
+        add(cap(0.06, 0.32), MAT.trousers, kn, 0, -0.21, 0);
+        const an = new THREE.Group(); an.position.y = -0.42; kn.add(an);
+        const shoe = add(cap(0.045, 0.17), MAT.shoes, an, 0, -0.04, 0.05); shoe.rotation.x = PI / 2; shoe.scale.set(1.1, 1, 0.75);
+        return { th, kn, an };
+      }
+      const lL = leg(1), lR = leg(-1);
+      Object.assign(P, { thL: lL.th, knL: lL.kn, anL: lL.an, thR: lR.th, knR: lR.kn, anR: lR.an });
+      // contact shadow
+      const [sc, sg] = C(128, 128); const rg = sg.createRadialGradient(64, 64, 4, 64, 64, 62); rg.addColorStop(0, "rgba(0,0,0,0.55)"); rg.addColorStop(1, "rgba(0,0,0,0)"); sg.fillStyle = rg; sg.fillRect(0, 0, 128, 128);
+      const sh = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.65), new THREE.MeshBasicMaterial({ map: TX(sc), transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4 }));
+      sh.rotation.x = -PI / 2; sh.position.y = 0.004; root.add(sh);
+      root.traverse((o) => { if (o.isMesh) o.frustumCulled = false; });
+      return P;
+    }
+    function pose(P, s) {
+      const A = s.walk ?? 0, ph = s.phase ?? 0, t = s.t ?? 0;
+      const sL = Math.sin(ph), sR = -sL;
+      const kL = A * (0.06 + 0.6 * Math.max(0, Math.cos(ph))), kR = A * (0.06 + 0.6 * Math.max(0, -Math.cos(ph)));
+      P.thL.rotation.x = -0.42 * sL * A; P.thR.rotation.x = -0.42 * sR * A;
+      P.knL.rotation.x = kL; P.knR.rotation.x = kR;
+      P.anL.rotation.x = -(P.thL.rotation.x + kL) * 0.6; P.anR.rotation.x = -(P.thR.rotation.x + kR) * 0.6;
+      P.hips.position.y = 0.95 - 0.025 * A * sL * sL;
+      P.hips.rotation.y = 0.06 * sL * A;
+      const breath = Math.sin(t * 1.6) * 0.01;
+      P.spine.rotation.set(0.03 * A + breath, -0.08 * sL * A, 0);
+      P.shL.rotation.set(0.3 * sL * A, 0, 0.06); P.elL.rotation.x = -0.15 - 0.2 * A * Math.max(0, -sL);
+      P.shR.rotation.set(0.12 * sR * A, 0, -0.05); P.elR.rotation.x = -0.06;
+      P.neck.rotation.set(s.headX ?? 0, s.headY ?? 0, 0);
+    }
+
+    // =====================================================================
+    // camera paths. keys: [t, x, z, [lookX, lookY, lookZ]]  (eye height 1.6)
+    // =====================================================================
+    const EYE = 1.6;
+    const CAM_A = [
+      [0.0, 1.45, 1.6, [-1.6, 1.55, 1.6]],
+      [1.95, 0.4, 1.6, [-1.6, 1.55, 1.6]],
+      [2.3, 0.45, 1.25, [-0.6, 1.5, -2.5]],
+      [2.75, 0.6, 0.5, [1.6, 1.45, -1.4]],
+      [3.55, 0.55, -0.25, [1.6, 1.45, -1.4]],
+      [3.95, 0.42, -0.75, [0.1, 2.3, -4.2]],
+      [4.8, 0.3, -1.9, [0.1, 2.3, -4.2]],
+      [5.3, 0.22, -2.95, [-0.6, 1.5, -9.0]],
+      [5.85, 0.15, -4.1, [-1.6, 1.55, -6.4]],
+      [6.35, 0.12, -5.0, [0.3, 0.7, -9.0]],
+      [6.8, 0.1, -5.3, [1.6, 1.2, -8.3]],
+      [7.12, 0.1, -5.35, [-0.2, 1.55, -11.0]],
+      [8.2, -0.05, -8.3, [-0.62, 1.35, -11.0]],
+      [8.7, -0.1, -8.85, [-0.65, 1.3, -11.0]],
+      [9.2, -0.12, -9.05, [-0.65, 1.3, -11.0]],
+      [9.45, -0.05, -9.0, [1.6, 1.6, -9.2]],
+      [9.75, 0.05, -8.75, [0.05, 2.3, -4.2]],
+      [10.95, 0.1, -6.35, [0.05, 2.3, -4.2]],
+      [11.4, 0.08, -5.95, [0.3, 0.0, -3.0]],
+      [12.2, 0.05, -5.3, [0.3, 0.0, -2.85]],
+    ];
+    const CAM_B = [
+      [12.28, 0.0, 0.8, [0.3, 1.55, -12]],
+      [13.1, -0.15, -2.6, [0.6, 1.6, -9]],
+      [13.6, -0.25, -4.0, [1.6, 1.85, -6.5]],
+      [15.3, -0.1, -5.2, [1.6, 1.85, -6.5]],
+      [15.8, 0.05, -6.1, [-1.6, 1.55, -8.6]],
+      [17.15, -0.1, -7.2, [-1.6, 1.5, -8.6]],
+      [17.55, 0.2, -8.2, [1.6, 1.75, -10.6]],
+      [18.95, 0.3, -9.1, [1.6, 1.7, -10.6]],
+      [19.35, 0.2, -10.3, [-1.6, 1.5, -13.0]],
+      [20.3, 0.1, -11.5, [-1.6, 1.5, -13.0]],
+      [20.75, 0.1, -12.1, [-1.6, 1.5, -15.2]],
+      [21.6, 0.05, -13.6, [-1.6, 1.5, -15.2]],
+      [22.05, 0.05, -14.4, [-1.6, 1.5, -17.4]],
+      [22.62, -0.05, -15.3, [-1.6, 1.5, -17.4]],
+      [23.2, 0.05, -16.0, [0.0, 2.25, -21.3]],
+      [24.35, 0.0, -17.8, [0.0, 2.25, -21.3]],
+      [25.2, 0.0, -18.2, [0.1, 1.9, -22.4]],
+      [26.68, 0.0, -18.3, [0.1, 1.86, -22.4]],
+    ];
+    // gentle push-ins on key words and short jolts on the anomaly hits
+    const PUNCH = [[3.98, 5], [8.6, 6], [13.2, 5], [17.04, 5], [21.76, 5], [25.38, 7]];
+    const JOLT = [[5.32, 0.5], [7.04, 1.1], [7.36, 0.7], [7.59, 0.7], [12.28, 0.8], [23.4, 0.6]];
+    function lensAt(t) {
+      let fov = FOV, jy = 0, jp = 0;
+      for (const [tp, a] of PUNCH) { const u = t - tp + 0.12; if (u > 0 && u < 1.2) fov -= a * (u < 0.12 ? smooth(u / 0.12) : 1 - smooth((u - 0.12) / 1.08)); }
+      for (const [tj, a] of JOLT) { const u = t - tj; if (u >= 0 && u < 0.45) { const e = Math.exp(-u * 9) * a * (PI / 180); jy += e * Math.sin(u * 61 + tj); jp += e * Math.sin(u * 47 + tj * 2.0); } }
+      return { fov, jy, jp };
+    }
+    function toAngles(keys) {
+      const out = []; let prevYaw = null;
+      for (const [t, x, z, L] of keys) {
+        const dx = L[0] - x, dy = L[1] - EYE, dz = L[2] - z;
+        let yaw = Math.atan2(-dx, -dz); const pitch = Math.atan2(dy, Math.hypot(dx, dz));
+        if (prevYaw !== null) { while (yaw - prevYaw > PI) yaw -= 2 * PI; while (yaw - prevYaw < -PI) yaw += 2 * PI; }
+        prevYaw = yaw; out.push([t, x, z, yaw, pitch]);
+      }
+      return out;
+    }
+    // monotone cubic Hermite per channel, at rest at both ends
+    function mkPath(keys) {
+      const n = keys.length, ch = keys[0].length - 1, m = [];
+      for (let i = 0; i < n; i++) {
+        const row = [];
+        for (let c = 1; c <= ch; c++) {
+          if (i === 0 || i === n - 1) { row.push(0); continue; }
+          const d0 = (keys[i][c] - keys[i - 1][c]) / (keys[i][0] - keys[i - 1][0]), d1 = (keys[i + 1][c] - keys[i][c]) / (keys[i + 1][0] - keys[i][0]);
+          row.push(d0 * d1 <= 0 ? 0 : 2 / (1 / d0 + 1 / d1));
+        }
+        m.push(row);
+      }
+      return (t) => {
+        if (t <= keys[0][0]) return keys[0].slice(1);
+        if (t >= keys[n - 1][0]) return keys[n - 1].slice(1);
+        let i = 0; while (t >= keys[i + 1][0]) i++;
+        const h = keys[i + 1][0] - keys[i][0], u = (t - keys[i][0]) / h, u2 = u * u, u3 = u2 * u;
+        const h00 = 2 * u3 - 3 * u2 + 1, h10 = u3 - 2 * u2 + u, h01 = -2 * u3 + 3 * u2, h11 = u3 - u2;
+        const out = [];
+        for (let c = 1; c <= ch; c++) out.push(h00 * keys[i][c] + h10 * h * m[i][c - 1] + h01 * keys[i + 1][c] + h11 * h * m[i + 1][c - 1]);
+        return out;
+      };
+    }
+    const pathA = mkPath(toAngles(CAM_A)), pathB = mkPath(toAngles(CAM_B));
+    const camPath = (t) => (t < T.B ? pathA(t) : pathB(t));
+    // walked distance table (for head bob phase), 240 Hz
+    const DIST = new Float32Array(Math.ceil(DUR * 240) + 2);
+    (function () {
+      let d = 0, prev = camPath(0);
+      for (let i = 1; i < DIST.length; i++) {
+        const t = i / 240; const p = camPath(t);
+        if (Math.abs(t - T.B) > 1 / 200) d += Math.hypot(p[0] - prev[0], p[1] - prev[1]);
+        DIST[i] = d; prev = p;
+      }
+    })();
+    function camAt(t) {
+      const p = camPath(t);
+      const i = clamp(Math.floor(t * 240), 0, DIST.length - 2), f = t * 240 - i;
+      const d = lerp(DIST[i], DIST[i + 1], f);
+      const p2 = camPath(t + 0.05), p0 = camPath(t - 0.05);
+      const speed = (t > T.B && t - 0.05 < T.B) ? 0 : Math.hypot(p2[0] - p0[0], p2[1] - p0[1]) / 0.1;
+      const amp = clamp(speed / 1.25, 0, 1.1);
+      // one footstep per beat: the head lands on the beat (sharp |sin| cusp), sways every two
+      const ph = beatPos(t) * PI, s1 = Math.abs(Math.sin(ph));
+      let [x, z, yaw, pitch] = p;
+      const right = [Math.cos(yaw), -Math.sin(yaw)];
+      const lat = 0.016 * amp * Math.sin(ph);
+      x += right[0] * lat; z += right[1] * lat;
+      const y = EYE + 0.026 * amp * (s1 - 0.6);
+      const L = lensAt(t);
+      yaw += 0.0055 * vnoise(t * 0.45, 1) + 0.0025 * amp * Math.sin(ph) + L.jy;
+      pitch += 0.0045 * vnoise(t * 0.5, 2) - 0.007 * amp * Math.pow(1 - s1, 3) + L.jp;
+      const roll = 0.006 * amp * Math.sin(ph) + 0.002 * vnoise(t * 0.3, 3) + L.jy * 0.4;
+      return { x, y, z, yaw, pitch, roll, fov: L.fov };
+    }
+
+    // =====================================================================
+    // build
+    // =====================================================================
+    const S = {};
+    const lamps = [];
+    let built = false, pending = null;
+    async function build() {
+      const fontRows = "я потерялся в своей голове ну кто же мне поможет найти выход отсюда столько проблем сейчас в моей бошке и я не знаю как мне выйти с этого круга на часах пять утра, снова не сплю мониторю твой канал звонка от тя жду глаза слипаются скоро попаду в царство снов но проснусь ли завтра вот это вопрос ?";
+      const jp = "出口探していますお心当たりの方は駅係員までお知らせください困りの客様へインターホン係員と話しできます知らせ長緑茶新発売すっきり、ひとやすみ。公衆電話瞳目薬ドラッグストアで週末遠くへ快眠マットレスぐっすり朝まで駅スタッフ募集中未経験歓迎写真展歩きスマホはやめましょう避難経路図現在地消火栓関係者以外立入禁止防犯カメラ作動中";
+      await Promise.all([
+        document.fonts.load('100px "YuB"', jp),
+        document.fonts.load('100px "NS"', fontRows),
+        document.fonts.load('100px "YuM"', jp),
+        document.fonts.load('100px "Bahn"', "Exit 0123456789 ?"),
+        document.fonts.load('700 100px "Bahn"', "Exit 0123456789 ?"),
+        document.fonts.load('500 100px "Bahn"', "Intercom Public Telephone PHOTO EXHIBITION Rail Trip"),
+      ]);
+      buildSurfaceMats();
+
+      // ---------------- shell
+      const uvFloor = (p) => [p.x / 1.2, -p.z / 1.2];
+      const uvWx = (p) => [p.z / 1.2, (p.y - 0.1) / 1.2];
+      const uvWz = (p) => [p.x / 1.2, (p.y - 0.1) / 1.2];
+      const uvCeilZ = (p) => [p.z / 1.024, p.x / 1.024];
+      const uvCeilX = (p) => [p.x / 1.024, p.z / 1.024];
+      surf([-1.6, 0, 3.2], [1, 0, 0], [0, 0, -1], 3.2, 30.2, M.floor, uvFloor, "floor", 0.2);
+      surf([1.6, 0, 3.2], [1, 0, 0], [0, 0, -1], 7.9, 3.2, M.floor, uvFloor, "floor", 0.2);
+      surf([-8, 0, -23.8], [1, 0, 0], [0, 0, -1], 6.4, 3.2, M.floor, uvFloor, "floor", 0.2);
+      surf([-1.6, H, -27], [1, 0, 0], [0, 0, 1], 3.2, 30.2, M.ceil, uvCeilZ, "ceil", 0.25);
+      surf([1.6, H, 0], [1, 0, 0], [0, 0, 1], 7.9, 3.2, M.ceil, uvCeilX, "ceil", 0.25);
+      surf([-8, H, -27], [1, 0, 0], [0, 0, 1], 6.4, 3.2, M.ceil, uvCeilX, "ceil", 0.25);
+      const walls = [
+        [[-1.6, 0, 3.2], [0, 0, -1], 27.0, uvWx],
+        [[1.6, 0, -27], [0, 0, 1], 27.0, uvWx],
+        [[9.5, 0, 3.2], [-1, 0, 0], 11.1, uvWz],
+        [[1.6, 0, 0], [1, 0, 0], 7.9, uvWz],
+        [[9.5, 0, 0], [0, 0, 1], 3.2, uvWx],
+        [[-8, 0, -27], [1, 0, 0], 9.6, uvWz],
+        [[-1.6, 0, -23.8], [-1, 0, 0], 6.4, uvWz],
+        [[-8, 0, -23.8], [0, 0, -1], 3.2, uvWx],
+      ];
+      for (const [o, u, w, uvf] of walls) {
+        surf(o, u, [0, 1, 0], w, H, M.wall, uvf, "wall", 0.2);
+        // baseboard: 9 cm strip standing 1 cm proud
+        const n = V3(...u).cross(V3(0, 1, 0));
+        surf([o[0] + n.x * 0.012, 0, o[2] + n.z * 0.012], u, [0, 1, 0], w, 0.09, M.base, uvf, "wall", 0.3);
+      }
+      // cornice where the walls meet the ceiling
+      box(0.04, 0.05, 27, M.white, -1.58, H - 0.025, -10.3); box(0.04, 0.05, 27, M.white, 1.58, H - 0.025, -13.5);
+
+      // ---------------- tactile paving: guide line along the corridor, warning dots at the turn
+      for (let z = 0.6; z > -26.4; z -= 0.3) { const m = plane(0.3, 0.3, M.tact); m.rotation.x = -PI / 2; m.position.set(-0.55, 0.004, z - 0.15); }
+      for (let x = -0.4; x < 9.0; x += 0.3) { const m = plane(0.3, 0.3, x < -0.1 ? M.tdot : M.tact); m.rotation.set(-PI / 2, 0, PI / 2); m.position.set(x + 0.15, 0.004, 1.05); }
+      { const m = plane(0.3, 0.3, M.tdot); m.rotation.x = -PI / 2; m.position.set(-0.55, 0.004, 1.05); }
+
+      // ---------------- ceiling lamps (recessed, across the corridor) + area lights
+      const lampGeo = new THREE.PlaneGeometry(1.22, 0.2);
+      function addLamp(x, z, along) {
+        const mat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+        const g = new THREE.Group(); g.position.set(x, H, z); if (along) g.rotation.y = PI / 2; scene.add(g);
+        const panel = new THREE.Mesh(lampGeo, mat); panel.rotation.x = PI / 2; panel.position.y = -0.03; g.add(panel);
+        box(1.32, 0.03, 0.3, M.white, 0, -0.015, 0, g);
+        const light = new THREE.RectAreaLight(0xf2f6ff, 1, along ? 0.2 : 1.22, along ? 1.22 : 0.2);
+        light.position.set(x, H - 0.035, z); light.rotation.x = -PI / 2; scene.add(light);
+        lamps.push({ x, z, mat, light, i: lamps.length });
+      }
+      for (let i = 0; i <= 10; i++) addLamp(0, 1.6 - 2.7 * i, false);
+      addLamp(4.2, 1.6, true); addLamp(7.0, 1.6, true); addLamp(-4.4, -25.4, true);
+
+      // ---------------- yellow hanging exit signs (double-sided lightboxes)
+      function hangSign(z) {
+        const g = new THREE.Group(); g.position.set(0, 2.35, z); scene.add(g);
+        const front = std({ color: 0xffffff, roughness: 0.35, emissive: 0xffffff, emissiveIntensity: 1 });
+        const back = std({ color: 0xffffff, roughness: 0.35, emissive: 0xffffff, emissiveIntensity: 1 });
+        const side = M.dark;
+        const m = new THREE.Mesh(new THREE.BoxGeometry(2.6, 0.6, 0.1), [side, side, side, side, front, back]); g.add(m);
+        for (const sx of [-1, 1]) { const rod = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 0.16, 8), M.steel); rod.position.set(sx * 1.0, 0.38, 0); g.add(rod); }
+        return { g, front, back };
+      }
+      S.s1 = hangSign(-4.2); S.s2 = hangSign(-21.3);
+      S.signTex = {
+        n0: signNormal(0), n1: signNormal(1), find: signLyric1("найти выход отсюда", 0),
+        back: signNormal(null, "up"), backLyric: signLyric2("и я не знаю", "как мне выйти", "loop"),
+        wake: signLyric2("но проснусь", "ли завтра я", null), q: signQuestion(),
+      };
+      S.s2light = new THREE.PointLight(0xffd768, 0, 9, 2); S.s2light.position.set(0, 2.0, -21.55); scene.add(S.s2light);
+
+      // ---------------- start corner: missing-person notice (left wall, facing +x)
+      {
+        const g = onWall(-1, 1.6, 1.55, 0.0);
+        const m = plane(1.2, 1.7, std({ map: texMissing(), roughness: 0.55 }), g); m.position.z = 0.012; frame(g, 1.2, 1.7);
+      }
+      // help panel + intercom (right wall, facing -x)
+      {
+        const g = onWall(1, -1.4, 1.62, 0.0);
+        S.helpMat = std({ map: texHelp(false), roughness: 0.4 }); S.helpTex = { n: S.helpMat.map, l: texHelp(true) };
+        const m = plane(1.0, 0.75, S.helpMat, g); m.position.z = 0.015; frame(g, 1.0, 0.75, 0.03, 0.03);
+        const ib = box(0.22, 0.3, 0.07, M.steel, 0, -0.7, 0.035, g);
+        const btn = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.02, 20), std({ color: 0xd8302a, roughness: 0.3, emissive: 0x501010 })); btn.rotation.x = PI / 2; btn.position.set(0, -0.76, 0.08); g.add(btn);
+        for (let i = 0; i < 4; i++) box(0.12, 0.008, 0.005, M.dark, 0, -0.6 + i * 0.016 - 0.02, 0.072, g);
+      }
+      // poster slots, left wall
+      function poster(z, tex, w = 1.03, h = 1.456, y = 1.5) { const g = onWall(-1, z, y); const mat = std({ map: tex, roughness: 0.5 }); const m = plane(w, h, mat, g); m.position.z = 0.012; frame(g, w, h); return mat; }
+      poster(-4.0, texStaff());
+      poster(-10.0, texExhibit());
+      poster(-20.4, texManners());
+      poster(-22.5, texEvac(), 0.62, 0.465, 1.45);
+      // lightboxes P1..P3 (left wall): emissive faces + a soft area light each
+      function lightbox(z, normalTex, lyricTex) {
+        const g = onWall(-1, z, 1.5);
+        const mat = std({ map: normalTex, emissiveMap: normalTex, emissive: 0xffffff, emissiveIntensity: 1.2, roughness: 0.3 });
+        const m = plane(1.2, 1.7, mat, g); m.position.z = 0.09;
+        box(1.32, 1.82, 0.08, M.alu, 0, 0, 0.04, g);
+        const light = new THREE.RectAreaLight(0xfff6ea, 0, 1.2, 1.7); light.position.set(-HW + 0.1, 1.5, z); light.rotation.y = -PI / 2; scene.add(light);
+        return { mat, tex: { n: normalTex, l: lyricTex }, light };
+      }
+      S.P1 = lightbox(-13.0, texP1(false), texP1(true));
+      S.P2 = lightbox(-15.2, texP2(false), texP2(true));
+      S.P3 = lightbox(-17.4, texP3(false), texP3(true));
+      // digital signage (left wall, z = -7.5)
+      {
+        const g = onWall(-1, -8.6, 1.55);
+        S.scrTex = { ad: texAdDrink(), ch: [texChannel(1), texChannel(2), texChannel(3)] };
+        S.scrMat = new THREE.MeshBasicMaterial({ map: S.scrTex.ad });
+        const m = plane(0.95, 1.69, S.scrMat, g); m.position.z = 0.065;
+        box(1.05, 1.79, 0.06, M.black, 0, 0, 0.03, g);
+        box(0.3, 0.05, 0.04, M.dark, 0, -0.95, 0.03, g);
+        // live CCTV inside the second post
+        S.feedRT = new THREE.WebGLRenderTarget(384, 216, { type: THREE.HalfFloatType });
+        S.feedMat = new THREE.ShaderMaterial({
+          uniforms: { tFeed: { value: S.feedRT.texture }, uK: { value: 1 }, uF: { value: 0 } },
+          vertexShader: "varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }",
+          fragmentShader: "uniform sampler2D tFeed; uniform float uK; uniform float uF; varying vec2 vUv; float h(vec2 p){ vec3 p3 = fract(vec3(p.xyx) * .1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); } void main(){ vec3 c = texture2D(tFeed, vUv).rgb; float l = dot(c, vec3(0.3,0.59,0.11)); l = 1.4 * l / (1.0 + l); l *= 0.9 + 0.1 * sin(vUv.y * 520.0); l += (h(vUv * 400.0 + uF) - 0.5) * 0.06; gl_FragColor = vec4(vec3(l * 0.92, l, l * 0.95) * uK, 1.0); }",
+        });
+        const fw = (FEED.w / SCRW) * 0.95, fh = (FEED.h / SCRH) * 1.69;
+        const fx = ((FEED.x + FEED.w / 2) / SCRW - 0.5) * 0.95, fy = (0.5 - (FEED.y + FEED.h / 2) / SCRH) * 1.69;
+        S.feed = plane(fw, fh, S.feedMat, g); S.feed.position.set(fx, fy, 0.067); S.feed.visible = false;
+        S.feedCam = new THREE.PerspectiveCamera(70, 384 / 216, 0.05, 60);
+        S.feedCam.position.set(-1.2, 2.55, -8.0); S.feedCam.lookAt(0.6, 1.0, -20);
+      }
+      // LED board + station clock (right wall)
+      {
+        const g = onWall(1, -6.6, 1.85);
+        S.ledTex = {
+          a: texLED("ご案内", "出口 →", 1, 2),
+          p1: [1, 2, 3, 4].map((k) => texLED("на часах", "пять утра,", Math.min(k, 2), Math.max(0, k - 2))),
+          p2: [1, 2, 3, 4].map((k) => texLED("я снова", "не сплю", Math.min(k, 2), Math.max(0, k - 2))),
+        };
+        S.ledMat = new THREE.MeshBasicMaterial({ map: S.ledTex.a });
+        const m = plane(1.8, 0.9, S.ledMat, g); m.position.z = 0.085;
+        box(1.92, 1.02, 0.08, M.black, 0, 0, 0.04, g);
+        const cg = onWall(1, -5.2, 2.3);
+        S.clockMat = std({ map: texClock(4, 59), roughness: 0.3 }); S.clockTex = { a: S.clockMat.map, b: texClock(5, 0) };
+        const face = new THREE.Mesh(new THREE.CircleGeometry(0.22, 48), S.clockMat); face.position.z = 0.066; cg.add(face);
+        const rim = new THREE.Mesh(new THREE.TorusGeometry(0.228, 0.02, 10, 48), M.dark); rim.position.z = 0.066; cg.add(rim);
+        const body = new THREE.Mesh(new THREE.CylinderGeometry(0.23, 0.23, 0.06, 48), M.dark); body.rotation.x = PI / 2; body.position.z = 0.03; cg.add(body);
+      }
+      // payphone (right wall, z = -9.5)
+      {
+        const g = onWall(1, -10.6, 0);
+        box(0.62, 0.035, 0.36, M.steel, 0, 0.95, 0.18, g);
+        box(0.04, 0.22, 0.3, M.steel, -0.25, 0.83, 0.16, g); box(0.04, 0.22, 0.3, M.steel, 0.25, 0.83, 0.16, g);
+        const green = std({ color: 0x2f9150, roughness: 0.35 });
+        const faceMat = std({ map: texPhoneFace(), roughness: 0.35 });
+        const ph = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.44, 0.2), [green, green, green, green, faceMat, green]); ph.position.set(0.02, 0.97 + 0.22, 0.13); g.add(ph);
+        // handset off the hook, hanging on its cord
+        S.hs = new THREE.Group(); S.hs.position.set(-0.2, 1.02, 0.39); g.add(S.hs);
+        const handset = new THREE.Mesh(new THREE.CapsuleGeometry(0.03, 0.17, 6, 12), green); handset.position.y = -0.36; S.hs.add(handset);
+        const cord = new THREE.Mesh(new THREE.CylinderGeometry(0.006, 0.006, 0.26, 6), M.dark); cord.position.y = -0.13; S.hs.add(cord);
+        const cord2 = new THREE.Mesh(new THREE.CylinderGeometry(0.006, 0.006, 0.32, 6), M.dark); cord2.position.set(-0.2, 1.1, 0.3); cord2.rotation.x = 1.0; g.add(cord2); S.cord2 = cord2;
+        S.hsHook = new THREE.Mesh(new THREE.CapsuleGeometry(0.03, 0.17, 6, 12), green); S.hsHook.position.set(-0.165, 1.24, 0.14); g.add(S.hsHook);
+        const sg = onWall(1, -10.6, 1.82);
+        S.phoneMat = std({ map: texPhoneSign(false), roughness: 0.4 }); S.phoneTex = { n: S.phoneMat.map, l: texPhoneSign(true) };
+        const sm = plane(1.2, 0.48, S.phoneMat, sg); sm.position.z = 0.02; frame(sg, 1.2, 0.48, 0.03, 0.025);
+      }
+      // service doors, hydrant box, vents (right wall)
+      const plateStaff = std({ map: texPlate("関係者以外立入禁止"), roughness: 0.4 });
+      for (const z of [-14.6, -19.2]) {
+        const g = onWall(1, z, 0);
+        box(1.0, 2.15, 0.03, M.steel, 0, 1.075, 0.015, g);
+        box(0.9, 2.05, 0.035, M.door, 0, 1.025, 0.03, g);
+        box(0.14, 0.025, 0.05, M.steel, -0.34, 1.0, 0.07, g); box(0.04, 0.06, 0.03, M.steel, -0.36, 1.0, 0.05, g);
+        const p = plane(0.45, 0.11, plateStaff, g); p.position.set(0, 1.62, 0.05);
+        const vg = onWall(1, z, 2.48); const v = plane(0.6, 0.25, std({ map: texVent(), roughness: 0.5, metalness: 0.3 }), vg); v.position.z = 0.01;
+      }
+      {
+        const g = onWall(1, -17.0, 1.1);
+        box(0.62, 0.82, 0.12, std({ map: texHydrant(), roughness: 0.4 }), 0, 0, 0.06, g);
+        const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.06, 16, 10, 0, PI * 2, 0, PI / 2), std({ color: 0xff2a1a, emissive: 0xff2010, emissiveIntensity: 2.5 }));
+        lamp.position.set(0, 0.47, 0.06); g.add(lamp);
+      }
+      { const g = onWall(1, -22.3, 1.5); const m = plane(0.73, 1.03, std({ map: texStaff(), roughness: 0.5 }), g); m.position.z = 0.012; frame(g, 0.73, 1.03); }
+      // CCTV domes
+      for (const [x, z] of [[-1.2, -8.0], [0.9, -15.0], [-1.0, 1.0]]) {
+        const base = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, 0.03, 24), M.white); base.position.set(x, H - 0.015, z); scene.add(base);
+        const dome = new THREE.Mesh(new THREE.SphereGeometry(0.07, 24, 12, 0, PI * 2, PI / 2, PI / 2), M.black); dome.position.set(x, H - 0.03, z); scene.add(dome);
+      }
+      {
+        const g = onWall(1, -8.4, 2.3);
+        const p = plane(0.42, 0.18, std({ map: texPlate("防犯カメラ作動中", 512, 220, "#fdfdfb", "#c42020"), roughness: 0.5 }), g); p.position.z = 0.01;
+      }
+
+      // ---------------- anomaly props
+      // swarm of warning stickers
+      S.stTex = texSticker();
+      const stMat = std({ map: S.stTex, roughness: 0.45, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 });
+      const stGeo = new THREE.PlaneGeometry(1, 1);
+      S.stickers = [];
+      function sticker(spec) {
+        const m = new THREE.Mesh(stGeo, stMat); m.scale.setScalar(spec.s); scene.add(m);
+        if (spec.kind === "wall") {
+          const out = spec.out || 0;
+          m.rotation.set(0, -spec.side * PI / 2 + spec.side * out, spec.rot);
+          m.position.set(spec.side * (HW - 0.006 - Math.abs(Math.sin(out)) * spec.s * 0.5), spec.y, spec.z);
+        } else if (spec.kind === "ceil") { m.rotation.set(PI / 2 + (spec.tilt || 0), 0, spec.rot); m.position.set(spec.x, H - 0.006 - (spec.tilt ? Math.abs(Math.sin(spec.tilt)) * spec.s * 0.5 : 0), spec.z); }
+        else { m.rotation.set(-PI / 2, 0, spec.rot); m.position.set(spec.x, 0.006, spec.z); }
+        m.visible = false; S.stickers.push({ m, t: spec.t });
+      }
+      sticker({ t: T.ST1, kind: "wall", side: -1, z: -6.4, y: 1.55, rot: 0.08, s: 0.6 });
+      sticker({ t: T.ST2, kind: "wall", side: 1, z: -8.3, y: 1.15, rot: -0.14, s: 0.6 });
+      sticker({ t: T.ST3, kind: "floor", x: 0.4, z: -8.1, rot: 0.5, s: 0.65 });
+      {
+        const r = mulberry32(777);
+        for (const [tb, count] of [[T.BURST1, 70], [T.BURST2, 55], [T.BURST3, 55]]) {
+          for (let i = 0; i < count; i++) {
+            const k = r(), z = -5.8 - Math.pow(r(), 0.8) * 10.5, s = 0.36 + r() * 0.2, rot = (r() - 0.5) * 0.9;
+            if (k < 0.55) {
+              const side = r() < 0.5 ? -1 : 1, y = 0.35 + r() * 2.25, out = r() < 0.45 ? (r() - 0.5) * 1.1 : 0;
+              if (side === 1 && z < -10.0 && z > -11.2 && y < 2.1) continue; // keep the payphone sign clear
+              sticker({ t: tb, kind: "wall", side, z, y, rot, s, out });
+            } else if (k < 0.75) sticker({ t: tb, kind: "ceil", x: (r() - 0.5) * 2.8, z, rot: r() * 6.28, s, tilt: r() < 0.5 ? (r() - 0.5) * 0.9 : 0 });
+            else {
+              const x = (r() - 0.5) * 2.8;
+              if (x < 0.2 && x > -1.4 && z < -10.4 && z > -11.6) continue; // notice board feet
+              sticker({ t: tb, kind: "floor", x, z, rot: r() * 6.28, s });
+            }
+          }
+        }
+      }
+      // standing notice board (A, from the first burst)
+      {
+        const g = new THREE.Group(); g.position.set(-0.65, 0, -11.0); scene.add(g); S.notice = g;
+        S.noticeTex = [0, 1, 2, 3, 4].map(texNotice);
+        S.noticeMat = std({ map: S.noticeTex[0], roughness: 0.5 });
+        const m = plane(1.25, 1.75, S.noticeMat, g); m.position.set(0, 1.25, 0.03);
+        box(1.33, 1.83, 0.04, M.steel, 0, 1.25, 0.0, g);
+        for (const sx of [-1, 1]) { box(0.04, 0.45, 0.04, M.steel, sx * 0.55, 0.2, 0, g); box(0.05, 0.03, 0.5, M.steel, sx * 0.55, 0.015, 0, g); }
+        g.visible = false;
+      }
+      // floor marking "с этого круга"
+      {
+        const mat = std({ map: texCircle(), transparent: true, roughness: 0.55, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3 });
+        S.circle = plane(2.4, 2.4, mat); S.circle.rotation.set(-PI / 2, 0, PI); S.circle.position.set(0.35, 0.006, -3.0); S.circle.visible = false;
+      }
+
+      // ---------------- the man
+      S.man = buildPerson(); scene.add(S.man.root);
+
+      // ---------------- ambient fill + image based light from the corridor itself
+      S.hemi = new THREE.HemisphereLight(0xf4f7fa, 0xd9dcdc, 0.0); scene.add(S.hemi);
+      lamps.forEach((L) => setLamp(L, 1));
+      S.s1.front.map = S.s1.front.emissiveMap = S.signTex.n0; S.s1.back.map = S.s1.back.emissiveMap = S.signTex.back;
+      S.s2.front.map = S.s2.front.emissiveMap = S.signTex.n0; S.s2.back.map = S.s2.back.emissiveMap = S.signTex.back;
+      S.man.root.visible = false;
+      const pm = new THREE.PMREMGenerator(renderer);
+      S.env = pm.fromScene(scene, 0.02, 0.05, 40, { size: 256, position: V3(0, 1.5, -9) });
+      scene.environment = S.env.texture;
+
+      buildPost();
+      built = true;
+      renderAt(pending ?? 0);
+      window.__exWorldBuilt && window.__exWorldBuilt();
+    }
+
+    // =====================================================================
+    // lights
+    // =====================================================================
+    const LAMP_E = 7.0, LAMP_I = 15.0;
+    function setLamp(L, k) { L.mat.color.setRGB(0.93 * LAMP_E * k, 0.96 * LAMP_E * k, 1.0 * LAMP_E * k); L.light.intensity = LAMP_I * k; }
+    function flick(i, t, rate = 30) { return hash1(i * 13.7 + Math.floor(t * rate) * 0.731); }
+    function lampLevel(L, t) {
+      const i = L.i, f = frameOf(t);
+      if (t >= T.BLK && t < T.B) return 0;
+      if (t < T.B) {
+        // section A: clean, a dip on the bursts and a 2-frame flicker that hides the clean-up
+        let k = 1;
+        if ((t >= T.BURST1 && t < T.BURST1 + 0.07) || (t >= T.BURST2 && t < T.BURST2 + 0.05) || (t >= T.BURST3 && t < T.BURST3 + 0.05)) k = L.z < -6 && L.z > -14 ? 0.35 : 0.8;
+        if (t >= T.CLEAR && t < T.CLEAR + 0.1) k = 0.12;
+        if (t >= 11.7 && t < T.BLK) k = flick(i, t, 15) < 0.25 + 0.6 * ramp(t, 11.7, T.BLK) ? 0.15 : 1;
+        if (t < 0.33) k *= smooth(t / 0.33);
+        return k;
+      }
+      // section B: tubes strike on one after another
+      const on = T.B + 0.03 + hash1(i * 3.1) * 0.25;
+      if (t < on) return 0;
+      if (t < on + 0.28) return flick(i, t, 30) < 0.55 ? 0.15 : 1;
+      let k = 0.9;
+      if (i === 9) k = 0.0; // a dead tube
+      if (i === 3 && flick(i, t, 12) < 0.18) k = 0.25; // one that buzzes
+      // lights die from the far end towards the camera (glaza slipayutsya)
+      if (L.z < 0.5 && t > 19.0) {
+        const off = L.x < -2 ? 19.2 : lerp(19.3, 22.5, clamp((L.z + 25.4) / (25.4 - 11.6), 0, 1));
+        const offT = L.z > -11.6 ? 22.6 + hash1(i) * 0.1 : nextBeat(off);
+        if (t >= offT + 0.12) k = 0; else if (t >= offT) k = flick(i, t, 30) < 0.5 ? 0.1 : 0.9;
+      }
+      if (L.x > 2 && t > 19.0) k = 0;
+      if (t >= T.DARK) k = 0;
+      return k;
+    }
+
+    // =====================================================================
+    // the world at time t
+    // =====================================================================
+    let lastKey = {};
+    function setMap(mat, tex, emissive) { if (mat.map === tex) return; mat.map = tex; if (emissive) mat.emissiveMap = tex; }
+    function update(t) {
+      const A = t < T.B, f = frameOf(t);
+      // ---- lamps
+      let sum = 0;
+      for (const L of lamps) { const k = lampLevel(L, t); setLamp(L, k); if (L.z < 2 && L.x > -2 && L.x < 2) sum += k; }
+      const avg = sum / 11;
+      scene.environmentIntensity = 0.55 * avg + (A ? 0 : 0.015);
+      S.hemi.intensity = 0.25 * avg;
+
+      // ---- exit signs
+      const signE = A ? 1.6 : t < T.DARK ? 1.45 : 1.25;
+      setMap(S.s1.front, A ? (t >= T.FIND ? S.signTex.find : S.signTex.n0) : S.signTex.n1, true);
+      setMap(S.s1.back, A && t >= T.TURN ? S.signTex.backLyric : S.signTex.back, true);
+      let s2tex = A ? S.signTex.n0 : S.signTex.n1, s2E = signE;
+      if (!A && t >= T.DARK - 0.1) s2tex = S.signTex.wake;
+      if (t >= T.Q) s2tex = S.signTex.q;
+      if (t >= T.RESET) s2tex = S.signTex.n0;
+      setMap(S.s2.front, s2tex, true);
+      // swaps flicker like a lightbox restarting
+      const swapFlick = (ts) => (t >= ts - 0.06 && t < ts + 0.12 ? (flick(7, t) < 0.5 ? 0.15 : 1) : 1);
+      let s1E = signE * swapFlick(T.FIND);
+      if (t >= T.BLK && t < T.B) s1E = 0;
+      if (!A) s2E *= swapFlick(T.DARK - 0.1) * swapFlick(T.Q);
+      if (t >= T.OFF && t < T.RESET) s2E = 0;
+      if (t >= T.RESET) s2E = signE * (t < T.RESET + 0.18 ? (flick(3, t) < 0.5 ? 0.1 : 1) : 1);
+      if (t >= T.BLK && t < T.B) s2E = 0;
+      S.s1.front.emissiveIntensity = S.s1.back.emissiveIntensity = s1E;
+      S.s2.front.emissiveIntensity = S.s2.back.emissiveIntensity = s2E;
+      S.s2light.intensity = !A && t >= T.DARK - 0.1 ? 1.0 * s2E : 0;
+
+      // ---- A: help panel, stickers, notice, circle
+      setMap(S.helpMat, A && t >= T.HELP ? S.helpTex.l : S.helpTex.n);
+      for (const s of S.stickers) s.m.visible = A && t >= s.t && t < T.CLEAR;
+      S.notice.visible = A && t >= T.BURST1 && t < T.CLEAR;
+      if (S.notice.visible) { let st = 0; if (t >= 7.8) st = 1; if (t >= 8.16) st = 2; if (t >= 8.42) st = 3; if (t >= 8.6) st = 4; setMap(S.noticeMat, S.noticeTex[st]); }
+      S.circle.visible = A && t >= T.CIRCLE;
+
+      // ---- B: clock, LED, screen, phone, lightboxes
+      setMap(S.clockMat, A ? S.clockTex.a : S.clockTex.b);
+      let led = S.ledTex.a;
+      if (!A) {
+        const w1 = [12.28, 12.46, 13.2, 13.48], w2 = [14.08, 14.38, 14.8, 15.18];
+        if (t < T.LED2) { let k = 0; for (const w of w1) if (t >= w) k++; led = S.ledTex.p1[Math.max(0, k - 1)]; }
+        else { let k = 0; for (const w of w2) if (t >= w) k++; led = S.ledTex.p2[Math.max(0, k - 1)]; }
+      }
+      setMap(S.ledMat, led);
+      const ledK = !A && t >= T.DARK ? 0.6 : 1;
+      S.ledMat.color.setScalar(1.6 * ledK * (t >= T.BLK && t < T.B ? 0 : 1));
+      const chan = !A && t >= T.SCR;
+      if (chan) { let k = 1; if (t >= 16.8) k = 2; if (t >= 17.04) k = 3; setMap(S.scrMat, S.scrTex.ch[k - 1]); } else setMap(S.scrMat, S.scrTex.ad);
+      const scrK = (t >= T.BLK && t < T.B ? 0 : 1.35) * (chan && t < T.SCR + 0.15 ? (flick(5, t) < 0.5 ? 0.2 : 1) : 1) * (!A && t >= T.DARK ? 0.55 : 1);
+      S.scrMat.color.setScalar(scrK);
+      S.feed.visible = chan; S.feedMat.uniforms.uK.value = scrK * 0.9; S.feedMat.uniforms.uF.value = f % 97;
+      setMap(S.phoneMat, !A && t >= T.PHONE ? S.phoneTex.l : S.phoneTex.n);
+      const off = !A && t >= T.PHONE - 0.6;
+      S.hs.visible = off; S.cord2.visible = off; S.hsHook.visible = !off;
+      S.hs.rotation.z = off ? 0.16 * Math.sin((t - T.PHONE) * 2.3) * Math.exp(-(t - T.PHONE) * 0.15) : 0;
+      for (const [P, ts] of [[S.P1, T.P1], [S.P2, T.P2], [S.P3, T.P3]]) {
+        const lyr = !A && t >= ts;
+        setMap(P.mat, lyr ? P.tex.l : P.tex.n, true);
+        let k = (t >= T.BLK && t < T.B ? 0 : 1) * (!A && t >= ts - 0.05 && t < ts + 0.15 ? (flick(11, t) < 0.5 ? 0.1 : 1) : 1);
+        P.mat.emissiveIntensity = 1.15 * k;
+        P.light.intensity = 2.2 * k;
+      }
+
+      // ---- the man
+      const P = S.man;
+      let vis = false, x = 1.1, z = 0, yaw = 0, walk = 0, d = 0, headY = 0, headX = 0;
+      if (A && t >= 0) {
+        vis = t < T.BLK;
+        const tStop = 6.95, v = 1.15;
+        if (t < tStop) { z = -26.0 + v * t; walk = 1; d = v * t; }
+        else { const u = clamp((t - tStop) / 0.4, 0, 1); z = -26.0 + v * tStop + v * 0.4 * (u - 0.5 * u * u); walk = 1 - smooth(u); d = v * tStop + v * 0.4 * (u - 0.5 * u * u); }
+        const cam = camAt(t);
+        if (t > T.BURST1) { const want = Math.atan2(cam.x - x, cam.z - z); yaw = lerp(0, want, smooth(ramp(t, T.BURST1, T.BURST1 + 0.6))); headY = 0; headX = 0.04; }
+      } else if (!A) {
+        if (t < T.DARK) { const v = 1.32; x = 0.95; z = -26.5 + v * (t - T.B); walk = 1; d = v * (t - T.B); vis = z < -3; }
+        else { x = 0.2; z = -24.0; walk = 0; yaw = 0; vis = t < T.OFF; headX = -0.05; }
+      }
+      P.root.visible = vis;
+      if (vis) { P.root.position.set(x, 0, z); P.root.rotation.y = yaw; pose(P, { walk, phase: (d / 1.5) * 2 * PI, t, headY, headX }); }
+    }
+
+    // =====================================================================
+    // post: bloom + filmic tone map + grain + vignette + eyelids
+    // =====================================================================
+    let post, brightM, blurM, compM, rtB1, rtB2, rtB3, postScene, postCam, quad;
+    const VS = "varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }";
+    function buildPost() {
+      postScene = new THREE.Scene(); postCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+      quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2)); quad.frustumCulled = false; postScene.add(quad);
+      rtB1 = new THREE.WebGLRenderTarget(375, 375, { type: THREE.HalfFloatType });
+      rtB2 = new THREE.WebGLRenderTarget(375, 375, { type: THREE.HalfFloatType });
+      brightM = new THREE.ShaderMaterial({
+        uniforms: { t: { value: null }, px: { value: 1.2 / SRES } }, vertexShader: VS, depthTest: false,
+        fragmentShader: "uniform sampler2D t; uniform float px; varying vec2 vUv; void main(){ vec3 c = vec3(0.0); for(int i=0;i<4;i++){ for(int j=0;j<4;j++){ c += texture2D(t, vUv + (vec2(float(i),float(j)) - 1.5) * px).rgb; } } c /= 16.0; c = min(c, vec3(40.0)); float l = max(c.r, max(c.g, c.b)); c *= smoothstep(1.4, 4.0, l); gl_FragColor = vec4(c, 1.0); }",
+      });
+      blurM = new THREE.ShaderMaterial({
+        uniforms: { t: { value: null }, dir: { value: new THREE.Vector2(1, 0) } }, vertexShader: VS, depthTest: false,
+        fragmentShader: "uniform sampler2D t; uniform vec2 dir; varying vec2 vUv; void main(){ vec2 s = dir / 375.0 * 1.6; vec3 c = texture2D(t, vUv).rgb * 0.2270; c += (texture2D(t, vUv + s).rgb + texture2D(t, vUv - s).rgb) * 0.1945; c += (texture2D(t, vUv + 2.0*s).rgb + texture2D(t, vUv - 2.0*s).rgb) * 0.1216; c += (texture2D(t, vUv + 3.0*s).rgb + texture2D(t, vUv - 3.0*s).rgb) * 0.0540; c += (texture2D(t, vUv + 4.0*s).rgb + texture2D(t, vUv - 4.0*s).rgb) * 0.0162; gl_FragColor = vec4(c, 1.0); }",
+      });
+      compM = new THREE.ShaderMaterial({
+        uniforms: { tScene: { value: rt.texture }, tBloom: { value: rtB1.texture }, uExpo: { value: 1 }, uBloom: { value: 0.25 }, uGrain: { value: 0.022 }, uFrame: { value: 0 }, uLid: { value: 0 }, uFade: { value: 1 }, uVig: { value: 0.55 }, uCA: { value: 0.0035 }, uBarrel: { value: 0.11 } },
+        vertexShader: VS, depthTest: false,
+        fragmentShader: `
+          uniform sampler2D tScene, tBloom; uniform float uExpo, uBloom, uGrain, uFrame, uLid, uFade, uVig, uCA, uBarrel; varying vec2 vUv;
+          vec3 aces(vec3 x){ const float a=2.51, b=0.03, c=2.43, d=0.59, e=0.14; return clamp((x*(a*x+b))/(x*(c*x+d)+e), 0.0, 1.0); }
+          float h12(vec2 p){ vec3 p3 = fract(vec3(p.xyx) * .1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
+          vec3 toSRGB(vec3 c){ return mix(c * 12.92, 1.055 * pow(c, vec3(1.0/2.4)) - 0.055, step(0.0031308, c)); }
+          void main(){
+            vec2 d = vUv - 0.5; float r2 = dot(d, d);
+            // barrel (fisheye-ish) lens: corners map to corners, the centre is magnified
+            vec2 uv = 0.5 + d * (1.0 + uBarrel * r2 * 4.0) / (1.0 + 2.0 * uBarrel);
+            vec2 dd = uv - 0.5;
+            vec3 col; col.r = texture2D(tScene, uv - dd * uCA * r2 * 4.0).r; col.g = texture2D(tScene, uv).g; col.b = texture2D(tScene, uv + dd * uCA * r2 * 4.0).b;
+            col += texture2D(tBloom, uv).rgb * uBloom;
+            col = max(col, vec3(0.0)) * uExpo;
+            col = aces(col);
+            col = toSRGB(col);
+            // a cold, slightly green fluorescent grade
+            col = col * vec3(0.985, 1.0, 1.005);
+            col *= 1.0 - uVig * r2 * 1.3;
+            // eyelids
+            float y = abs(vUv.y - 0.5) * 2.0; float edge = mix(1.25, -0.08, uLid) * (1.0 - 0.1 * d.x * d.x * 4.0);
+            col *= 1.0 - smoothstep(edge - 0.1, edge + 0.04, y);
+            col += (h12(gl_FragCoord.xy + uFrame * 19.37) - 0.5) * uGrain;
+            gl_FragColor = vec4(clamp(col * uFade, 0.0, 1.0), 1.0);
+          }`,
+      });
+    }
+    function pass(m, target) { quad.material = m; renderer.setRenderTarget(target); renderer.render(postScene, postCam); }
+
+    // =====================================================================
+    // frame
+    // =====================================================================
+    function renderAt(t) {
+      if (!built) { pending = t; return; }
+      t = clamp(t, 0, DUR - 1e-4);
+      const f = frameOf(t);
+      update(t);
+      const c = camAt(t);
+      camera.position.set(c.x, c.y, c.z);
+      camera.rotation.set(c.pitch, c.yaw, c.roll);
+      if (camera.fov !== c.fov) { camera.fov = c.fov; camera.updateProjectionMatrix(); }
+      camera.updateMatrixWorld();
+      // CCTV feed for the signage
+      if (S.feed.visible) { S.feed.visible = false; renderer.setRenderTarget(S.feedRT); renderer.render(scene, S.feedCam); S.feed.visible = true; }
+      renderer.setRenderTarget(rt); renderer.setClearColor(0x000000, 1); renderer.render(scene, camera);
+      brightM.uniforms.t.value = rt.texture; pass(brightM, rtB1);
+      blurM.uniforms.t.value = rtB1.texture; blurM.uniforms.dir.value.set(1, 0); pass(blurM, rtB2);
+      blurM.uniforms.t.value = rtB2.texture; blurM.uniforms.dir.value.set(0, 1); pass(blurM, rtB1);
+      blurM.uniforms.t.value = rtB1.texture; blurM.uniforms.dir.value.set(1, 0); pass(blurM, rtB2);
+      blurM.uniforms.t.value = rtB2.texture; blurM.uniforms.dir.value.set(0, 1); pass(blurM, rtB1);
+      // grade per section
+      let expo = 1.22, lid = 0, fade = 1;
+      if (t < 0.25) fade = smooth(t / 0.25);
+      if (t >= T.BLK && t < T.B) fade = 0;
+      if (t >= T.B && t < T.B + 0.1) fade = 0.6;
+      // heavy eyelids on "глаза слипаются", a slow blink into the dark, opening on "проснусь"
+      const lidKeys = [[19.55, 0], [19.78, 0.42], [20.0, 0.0], [20.95, 0.0], [21.15, 0.5], [21.4, 0.0], [22.4, 0.0], [22.66, 1.0], [22.98, 1.0], [23.4, 0.0]];
+      for (let i = 0; i < lidKeys.length - 1; i++) { const [t0, v0] = lidKeys[i], [t1, v1] = lidKeys[i + 1]; if (t >= t0 && t < t1) lid = lerp(v0, v1, smooth((t - t0) / (t1 - t0))); }
+      if (t >= T.DARK - 0.4) expo = 1.3;
+      if (t >= T.OFF && t < T.RESET) fade = 0;
+      compM.uniforms.uExpo.value = expo; compM.uniforms.uLid.value = lid; compM.uniforms.uFade.value = fade; compM.uniforms.uFrame.value = f % 997;
+      pass(compM, null);
+    }
+
+    window.addEventListener("hf-seek", (e) => renderAt(e.detail.time));
+    window.__exDebug = { renderAt, S, camera, scene, lamps, camAt };
+    build();
+  </script>
+</template>

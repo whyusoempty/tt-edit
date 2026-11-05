@@ -1,0 +1,142 @@
+<template>
+  <style>
+    @font-face {
+      font-family: "PS2P";
+      src: url("assets/fonts/PressStart2P.ttf");
+    }
+    #root {
+      position: absolute;
+      inset: 0;
+      font-family: "PS2P", monospace;
+      pointer-events: none;
+    }
+    /* dialogue band: dark gradient from the bottom, speaker tag above the line (Mouthwashing-like layout, pixel font) */
+    .band {
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      height: 470px;
+      background: linear-gradient(to top, rgba(0, 0, 0, 0.92) 0%, rgba(0, 0, 0, 0.75) 45%, rgba(0, 0, 0, 0) 100%);
+      opacity: 0;
+    }
+    .dlg {
+      position: absolute;
+      left: 110px;
+      right: 80px;
+      bottom: 120px;
+      opacity: 0;
+    }
+    .who {
+      display: block;
+      font-size: 32px;
+      line-height: 40px;
+      color: #6dff7e;
+      transform: skewX(-12deg);
+      transform-origin: 0 100%;
+      margin: 0 0 22px 0;
+      text-shadow: 4px 4px 0 #000;
+    }
+    .who.ship {
+      color: #ff5a3a;
+    }
+    .who.unit {
+      color: #e8f4ff;
+    }
+    .ln {
+      display: block;
+      white-space: pre;
+      font-size: 40px;
+      line-height: 64px;
+      color: #c4f5b8;
+      text-shadow: 5px 5px 0 #000;
+      padding-left: 60px;
+    }
+    .ch {
+      opacity: 0;
+    }
+    .prompt {
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: 905px;
+      text-align: center;
+      font-size: 32px;
+      line-height: 40px;
+      color: #f0ead0;
+      text-shadow: 4px 4px 0 #000;
+      opacity: 0;
+    }
+    .prompt b {
+      display: inline-block;
+      padding: 6px 12px 4px;
+      margin-right: 18px;
+      border: 4px solid #f0ead0;
+      font-weight: normal;
+    }
+    .prompt.deny {
+      color: #ff4a30;
+    }
+  </style>
+  <div id="root" data-composition-id="hud" data-width="1500" data-height="1500" data-duration="26.68">
+    <div class="band" data-show="2.16" data-hide="26.09" data-layout-allow-overlap></div>
+
+    <div class="prompt" id="p-open" data-show="4.18" data-hide="4.5" data-layout-allow-overlap data-layout-allow-occlusion><b>E</b>ОТКРЫТЬ</div>
+    <div class="prompt deny" id="p-deny" data-show="4.5" data-hide="5.25" data-layout-allow-overlap data-layout-allow-occlusion>ЗАПЕРТО</div>
+
+    <div class="dlg" data-hide="5.25" data-layout-allow-overlap data-layout-allow-occlusion><span class="who">ДЕЖУРНЫЙ</span><span class="ln" data-words="ну@2.22 кто@2.44 же@2.64 мне@2.82 поможет@2.98"></span><span class="ln" data-words="найти@3.72 выход@3.98 отсюда@4.50"></span></div>
+    <div class="dlg" data-hide="9.20" data-layout-allow-overlap data-layout-allow-occlusion><span class="who">ДЕЖУРНЫЙ</span><span class="ln" data-words="столько@7.04 проблем@7.30 сейчас@7.80"></span><span class="ln" data-words="в@8.16 моей@8.42 бошке@8.60"></span></div>
+    <div class="dlg" data-hide="12.12" data-layout-allow-overlap data-layout-allow-occlusion><span class="who ship">БОРТ</span><span class="ln" data-words="и@9.22 я@9.48 не@9.52 знаю@9.74 как@10.26 мне@10.42"></span><span class="ln" data-words="выйти@10.66 с@11.10 этого@11.18 круга@11.64"></span></div>
+    <div class="dlg" data-hide="15.44" data-layout-allow-overlap data-layout-allow-occlusion><span class="who">ДЕЖУРНЫЙ</span><span class="ln" data-words="на@12.28 часах@12.46 пять@13.20 утра,@13.48"></span><span class="ln" data-words="я@14.08 снова@14.38 не@14.80 сплю@15.18"></span></div>
+    <div class="dlg" data-hide="17.28" data-layout-allow-overlap data-layout-allow-occlusion><span class="who">ДЕЖУРНЫЙ</span><span class="ln" data-words="мониторю@15.60 твой@16.80 канал@17.04"></span></div>
+    <div class="dlg" data-hide="22.72" data-layout-allow-overlap data-layout-allow-occlusion><span class="who ship">БОРТ</span><span class="ln" data-words="глаза@19.14 слипаются@19.60"></span><span class="ln" data-words="я@20.46 скоро@20.60 попаду@20.96"></span><span class="ln" data-words="в@21.74 царство@21.76 снов@22.30"></span></div>
+    <div class="dlg" data-hide="24.38" data-layout-allow-overlap data-layout-allow-occlusion><span class="who">ДЕЖУРНЫЙ</span><span class="ln" data-words="но@22.74 проснусь@22.92 ли@23.56"></span><span class="ln" data-words="завтра@23.74 я@24.16"></span></div>
+    <div class="dlg" data-hide="26.09" data-layout-allow-overlap data-layout-allow-occlusion><span class="who unit">UNIT 1</span><span class="ln" data-words="вот@24.42 это@24.80 вопрос@25.38"></span></div>
+  </div>
+  <script>
+    (function () {
+      const tl = gsap.timeline({ paused: true });
+      const root = document.querySelector('[data-composition-id="hud"]');
+
+      // every word appears at its sung time; letters spread over a short span, never into the next word
+      root.querySelectorAll(".dlg").forEach((box) => {
+        const words = [];
+        box.querySelectorAll(".ln").forEach((ln) => {
+          ln.textContent = "";
+          ln.dataset.words.split(" ").forEach((tok, i) => {
+            const at = tok.lastIndexOf("@");
+            const w = tok.slice(0, at), s = parseFloat(tok.slice(at + 1));
+            if (i) ln.appendChild(document.createTextNode(" "));
+            const spans = [...w].map((c) => {
+              const sp = document.createElement("span");
+              sp.className = "ch"; sp.textContent = c; ln.appendChild(sp); return sp;
+            });
+            words.push({ s, spans });
+          });
+        });
+        const t0 = words[0].s, hide = parseFloat(box.dataset.hide);
+        tl.set(box, { opacity: 1 }, t0 - 0.02);
+        words.forEach((w, i) => {
+          const next = i < words.length - 1 ? words[i + 1].s : w.s + 0.5;
+          const span = Math.min(0.055 * w.spans.length, Math.max(0.03, next - w.s - 0.02));
+          w.spans.forEach((sp, k) => tl.set(sp, { opacity: 1 }, w.s + (span * k) / w.spans.length));
+        });
+        tl.set(box, { opacity: 0 }, hide);
+      });
+      root.querySelectorAll(".band, .prompt").forEach((el) => {
+        const a = parseFloat(el.dataset.show), b = parseFloat(el.dataset.hide);
+        tl.fromTo(el, { opacity: 0 }, { opacity: 1, duration: el.classList.contains("band") ? 0.25 : 0.05, ease: "steps(3)" }, a);
+        tl.set(el, { opacity: 0 }, b);
+      });
+      // the band dips out where the screen itself carries the line (phone close-up) and comes back
+      const band = root.querySelector(".band");
+      tl.to(band, { opacity: 0, duration: 0.2 }, 17.3);
+      tl.to(band, { opacity: 1, duration: 0.2 }, 19.0);
+      tl.to(band, { opacity: 0, duration: 0.2 }, 5.3);
+      tl.to(band, { opacity: 1, duration: 0.1 }, 6.98);
+
+      window.__timelines = window.__timelines || {};
+      window.__timelines["hud"] = tl;
+    })();
+  </script>
+</template>

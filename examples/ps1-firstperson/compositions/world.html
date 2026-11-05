@@ -1,0 +1,874 @@
+<template>
+  <style>
+    @font-face {
+      font-family: "PS2P";
+      src: url("assets/fonts/PressStart2P.ttf");
+    }
+    #root {
+      position: absolute;
+      inset: 0;
+      background: #000;
+      overflow: hidden;
+    }
+    #world-canvas {
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 1500px;
+      height: 1500px;
+      display: block;
+      image-rendering: pixelated;
+    }
+  </style>
+  <div id="root" data-composition-id="world" data-width="1500" data-height="1500" data-duration="26.68">
+    <canvas id="world-canvas" width="375" height="375"></canvas>
+  </div>
+  <script>
+    window.__hf = window.__hf || {};
+    window.__hf.buildReady = window.__hf.buildReady || {};
+    window.__hf.buildReady["world-3d"] = new Promise((r) => (window.__worldBuilt = r));
+    (function () {
+      const clock = { v: 0 };
+      const tl = gsap.timeline({ paused: true });
+      tl.to(clock, { v: 1, duration: 26.68, ease: "none" }, 0);
+      window.__timelines = window.__timelines || {};
+      window.__timelines["world"] = tl;
+    })();
+  </script>
+  <script type="module">
+    import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.181.2/+esm";
+
+    // ---------- timing (mirrors lyrics-timing.json) ----------
+    const FPS = 30;
+    const CUT_ROOM = 12.28; // section B: the room
+    const CUT_DREAM = 22.74; // waking on the corridor floor
+    const CUT_END = 24.38; // RESTART? screen (HUD)
+    const BEAT = 60 / 143.5;
+    const STAMPS_A = [5.32, 5.71, 6.13];
+    const BURSTS = [7.04, 7.36, 7.59];
+    const GAP = [6.5, 7.04];
+    const DOOR_OPEN = 9.22;
+    const BLACKOUT = 12.12;
+    const L5 = [["И", 9.22], ["Я", 9.48], ["НЕ", 9.52], ["ЗНАЮ", 9.74], ["КАК", 10.26], ["МНЕ", 10.42], ["ВЫЙТИ", 10.66], ["С", 11.1], ["ЭТОГО", 11.18], ["КРУГА", 11.64]];
+
+    // ---------- helpers ----------
+    function mulberry32(a) {
+      return function () {
+        a |= 0; a = (a + 0x6d2b79f5) | 0;
+        let t = Math.imul(a ^ (a >>> 15), 1 | a);
+        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+      };
+    }
+    function hash1(n) { const x = Math.sin(n * 127.1 + 311.7) * 43758.5453; return x - Math.floor(x); }
+    const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+    const lerp = (a, b, u) => a + (b - a) * u;
+    const smooth = (u) => u * u * (3 - 2 * u);
+    const frameOf = (t) => Math.floor(t * FPS + 1e-4);
+    function flick(seed, t, rate, low = 0.25) { return hash1(frameOf(t) * 13.37 + seed * 91.7) < rate ? low : 1; }
+    // piecewise smoothstep through [t, v] pairs
+    function env(keys, t) {
+      if (t <= keys[0][0]) return keys[0][1];
+      for (let i = 0; i < keys.length - 1; i++) {
+        const [t0, v0] = keys[i], [t1, v1] = keys[i + 1];
+        if (t < t1) return lerp(v0, v1, smooth((t - t0) / (t1 - t0)));
+      }
+      return keys[keys.length - 1][1];
+    }
+
+    function makeCanvas(w, h) { const c = document.createElement("canvas"); c.width = w; c.height = h; return c; }
+    function texFrom(c, repeat) {
+      const t = new THREE.CanvasTexture(c);
+      t.magFilter = THREE.NearestFilter; t.minFilter = THREE.NearestFilter; t.generateMipmaps = false;
+      t.colorSpace = THREE.SRGBColorSpace;
+      if (repeat) { t.wrapS = t.wrapT = THREE.RepeatWrapping; }
+      return t;
+    }
+    // threshold alpha so canvas text has hard pixel edges
+    function hardAlpha(g, w, h, cut = 110) {
+      const d = g.getImageData(0, 0, w, h); const a = d.data;
+      for (let i = 3; i < a.length; i += 4) a[i] = a[i] >= cut ? 255 : 0;
+      g.putImageData(d, 0, 0);
+    }
+    const scratch = new Map();
+    function hardText(g, text, x, y, font, color, align = "left") {
+      const w = g.canvas.width, h = g.canvas.height, key = w + "x" + h;
+      if (!scratch.has(key)) scratch.set(key, makeCanvas(w, h));
+      const s = scratch.get(key), sg = s.getContext("2d", { willReadFrequently: true });
+      sg.clearRect(0, 0, w, h);
+      sg.font = font; sg.fillStyle = color; sg.textAlign = align; sg.textBaseline = "top";
+      sg.fillText(text, x, y);
+      hardAlpha(sg, w, h);
+      g.drawImage(s, 0, 0);
+    }
+    function noiseFill(g, w, h, base, amt, rng) {
+      g.fillStyle = base; g.fillRect(0, 0, w, h);
+      for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+        const v = (rng() - 0.5) * amt;
+        g.fillStyle = v > 0 ? `rgba(255,255,255,${v})` : `rgba(0,0,0,${-v})`;
+        g.fillRect(x, y, 1, 1);
+      }
+    }
+
+    // ---------- PS1 vertex snapping ----------
+    const SNAP = 110.0;
+    function ps1(mat) {
+      mat.onBeforeCompile = (s) => {
+        s.vertexShader = s.vertexShader.replace(
+          "#include <project_vertex>",
+          `#include <project_vertex>
+           { vec4 sp = gl_Position; sp.xy = floor(sp.xy / sp.w * ${SNAP.toFixed(1)} + 0.5) / ${SNAP.toFixed(1)} * sp.w; gl_Position = sp; }`,
+        );
+      };
+      return mat;
+    }
+    const lam = (o) => ps1(new THREE.MeshLambertMaterial(o));
+    const basic = (o) => ps1(new THREE.MeshBasicMaterial(o));
+
+    // ---------- renderer ----------
+    const W = 375, H = 375;
+    const canvas = document.getElementById("world-canvas");
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, alpha: false, preserveDrawingBuffer: true });
+    renderer.setPixelRatio(1);
+    renderer.setSize(W, H, false);
+    renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
+    renderer.setClearColor(0x000000, 1);
+    const rt = new THREE.WebGLRenderTarget(W, H, { minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter, type: THREE.HalfFloatType });
+
+    const scene = new THREE.Scene();
+    scene.fog = new THREE.Fog(0x000000, 0.5, 10.5);
+    const camera = new THREE.PerspectiveCamera(70, 1, 0.05, 60);
+    const ambient = new THREE.AmbientLight(0x9aa0a8, 0.12);
+    scene.add(ambient);
+
+    // flashlight (held slightly right/low of the eyes)
+    const flash = new THREE.SpotLight(0xffe9c8, 9, 13, 0.52, 0.55, 1.3);
+    scene.add(flash); scene.add(flash.target);
+
+    // ---------- post: dither, 5-bit color, grain, eyelids ----------
+    const post = new THREE.ShaderMaterial({
+      uniforms: {
+        tDiffuse: { value: rt.texture }, res: { value: new THREE.Vector2(W, H) },
+        uFade: { value: 1 }, uLid: { value: 0 }, uFrame: { value: 0 }, uGrain: { value: 0.04 },
+        uAberr: { value: 0.6 }, uTear: { value: 0 }, uTearY: { value: 0.5 },
+      },
+      vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`,
+      fragmentShader: `
+        uniform sampler2D tDiffuse; uniform vec2 res;
+        uniform float uFade, uLid, uFrame, uGrain, uAberr, uTear, uTearY;
+        varying vec2 vUv;
+        float hash(vec2 p){ return fract(sin(dot(p, vec2(12.9898,78.233))) * 43758.5453); }
+        float bayer2(vec2 a){ a = floor(a); return fract(dot(a, vec2(0.5, a.y * 0.75))); }
+        float bayer4(vec2 a){ return bayer2(0.5 * a) * 0.25 + bayer2(a); }
+        void main(){
+          vec2 px = floor(vUv * res);
+          vec2 uv = (px + 0.5) / res;
+          float band = step(abs(uv.y - uTearY), 0.035) * uTear;
+          uv.x += band * (hash(vec2(px.y, uFrame)) - 0.5) * 0.09;
+          float ab = (uAberr + band * 3.0) / res.x;
+          vec3 c;
+          c.r = texture2D(tDiffuse, uv + vec2(ab, 0.0)).r;
+          c.g = texture2D(tDiffuse, uv).g;
+          c.b = texture2D(tDiffuse, uv - vec2(ab, 0.0)).b;
+          c = pow(clamp(c, 0.0, 1.0), vec3(1.0 / 2.2));
+          // dirty grade: crush, cool-green shadows, warm-ish highs
+          c = mix(c, c * vec3(0.92, 1.0, 0.94), 0.6);
+          c = clamp((c - 0.015) * 1.08, 0.0, 1.0);
+          c *= uFade;
+          c += (hash(px + uFrame * 7.13) - 0.5) * uGrain;
+          vec2 d = uv - 0.5;
+          c *= 1.0 - dot(d, d) * 1.1;
+          // eyelids
+          float x2 = pow((uv.x - 0.5) * 2.0, 2.0);
+          float h = 0.86 * pow(max(1.0 - uLid, 0.0), 0.8);
+          float edge = h * (1.0 - 0.38 * x2);
+          float dy = abs(uv.y - 0.5);
+          float lid = smoothstep(edge - 0.07, edge, dy);
+          c *= 1.0 - lid;
+          c *= 1.0 - 0.35 * smoothstep(edge - 0.22, edge, dy) * step(0.001, uLid);
+          // ordered dither into 5-bit-ish levels
+          float b = bayer4(px) - 0.5;
+          float L = 26.0;
+          c = floor(c * L + 0.5 + b * 0.9) / L;
+          gl_FragColor = vec4(clamp(c, 0.0, 1.0), 1.0);
+        }`,
+      depthTest: false, depthWrite: false,
+    });
+    const postScene = new THREE.Scene();
+    const postCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+    postScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), post));
+
+    // ---------- build ----------
+    // the face is declared by @font-face above; just wait for it
+    const fontsReady = document.fonts.load('16px "PS2P"', "ВЫХОД").then(() => document.fonts.ready);
+
+    const S = {}; // scene handles
+    let built = false, pending = null;
+
+    function wallTexture() {
+      const rng = mulberry32(11), c = makeCanvas(64, 96), g = c.getContext("2d");
+      noiseFill(g, 64, 96, "#3c3f39", 0.12, rng);
+      // lower tiles
+      const ty = 58;
+      for (let y = ty; y < 96; y += 8) for (let x = 0; x < 64; x += 8) {
+        const k = rng();
+        g.fillStyle = k < 0.08 ? "#1a1d1a" : k < 0.3 ? "#2b3630" : "#33423a";
+        g.fillRect(x, y, 8, 8);
+        g.fillStyle = "rgba(0,0,0,0.5)"; g.fillRect(x, y, 8, 1); g.fillRect(x, y, 1, 8);
+        if (rng() < 0.15) { g.fillStyle = "rgba(0,0,0,0.35)"; g.fillRect(x + 2, y + 3, 4, 1); }
+      }
+      g.fillStyle = "#3d1915"; g.fillRect(0, ty - 3, 64, 3);
+      g.fillStyle = "#24100d"; g.fillRect(0, ty - 1, 64, 1);
+      // drips and stains
+      for (let i = 0; i < 9; i++) {
+        const x = Math.floor(rng() * 64), len = 6 + Math.floor(rng() * 40), y0 = Math.floor(rng() * 20);
+        g.fillStyle = `rgba(16,14,8,${0.25 + rng() * 0.3})`; g.fillRect(x, y0, 1 + Math.floor(rng() * 2), len);
+      }
+      for (let i = 0; i < 5; i++) {
+        g.fillStyle = `rgba(30,24,10,${0.15 + rng() * 0.2})`;
+        g.fillRect(Math.floor(rng() * 56), Math.floor(rng() * 50), 4 + Math.floor(rng() * 8), 3 + Math.floor(rng() * 6));
+      }
+      g.fillStyle = "#181816"; g.fillRect(0, 93, 64, 3);
+      return texFrom(c, true);
+    }
+    function floorTexture() {
+      const rng = mulberry32(23), c = makeCanvas(32, 32), g = c.getContext("2d");
+      for (let y = 0; y < 2; y++) for (let x = 0; x < 2; x++) {
+        g.fillStyle = (x + y) % 2 ? "#2c2b27" : "#1c1b19"; g.fillRect(x * 16, y * 16, 16, 16);
+      }
+      for (let i = 0; i < 260; i++) { g.fillStyle = `rgba(0,0,0,${rng() * 0.35})`; g.fillRect(Math.floor(rng() * 32), Math.floor(rng() * 32), 1, 1); }
+      for (let i = 0; i < 40; i++) { g.fillStyle = `rgba(255,250,230,${rng() * 0.06})`; g.fillRect(Math.floor(rng() * 32), Math.floor(rng() * 32), 1, 1); }
+      return texFrom(c, true);
+    }
+    function ceilTexture() {
+      const rng = mulberry32(5), c = makeCanvas(32, 32), g = c.getContext("2d");
+      noiseFill(g, 32, 32, "#2b2b29", 0.1, rng);
+      g.fillStyle = "#161615"; g.fillRect(0, 0, 32, 1); g.fillRect(0, 0, 1, 32);
+      g.fillStyle = "rgba(40,30,10,0.4)"; g.fillRect(9, 12, 7, 5);
+      return texFrom(c, true);
+    }
+    function doorTexture(base, seed) {
+      const rng = mulberry32(seed), c = makeCanvas(32, 64), g = c.getContext("2d");
+      noiseFill(g, 32, 64, base, 0.14, rng);
+      g.fillStyle = "rgba(0,0,0,0.35)"; g.fillRect(4, 5, 24, 22); g.fillRect(4, 32, 24, 24);
+      g.fillStyle = "rgba(255,255,255,0.06)"; g.fillRect(5, 6, 22, 20); g.fillRect(5, 33, 22, 22);
+      g.fillStyle = "#8b877a"; g.fillRect(25, 30, 4, 2); g.fillRect(26, 32, 2, 2);
+      for (let i = 0; i < 14; i++) { g.fillStyle = `rgba(70,30,10,${0.2 + rng() * 0.4})`; g.fillRect(Math.floor(rng() * 32), Math.floor(rng() * 64), 1 + Math.floor(rng() * 3), 1 + Math.floor(rng() * 3)); }
+      g.fillStyle = "#1a1a18"; g.fillRect(2, 58, 28, 5);
+      return texFrom(c);
+    }
+    function signTexture() {
+      const c = makeCanvas(96, 32), g = c.getContext("2d");
+      g.fillStyle = "#1c5a31"; g.fillRect(0, 0, 96, 32);
+      g.fillStyle = "#0d2a17"; g.fillRect(0, 0, 96, 3); g.fillRect(0, 29, 96, 3); g.fillRect(0, 0, 3, 32); g.fillRect(93, 0, 3, 32);
+      hardText(g, "ВЫХОД", 48, 8, "16px PS2P", "#c9ffd2", "center");
+      return texFrom(c);
+    }
+    function graffitiTexture() {
+      const rng = mulberry32(77), c = makeCanvas(256, 80), g = c.getContext("2d");
+      [["Я ПОТЕРЯЛСЯ", 14], ["В СВОЕЙ ГОЛОВЕ", 46]].forEach(([ln, y]) => {
+        const x0 = 128 - ln.length * 8;
+        [...ln].forEach((ch, i) => hardText(g, ch, x0 + i * 16, y + Math.floor(rng() * 3) - 1, "16px PS2P", "#8e1a12"));
+      });
+      // sparse paint drips from the middle of letter bottoms
+      const d = g.getImageData(0, 0, 256, 80).data;
+      g.fillStyle = "#7a150f";
+      for (let i = 0; i < 16; i++) {
+        const x = 20 + Math.floor(rng() * 216), row = rng() < 0.5 ? 30 : 62;
+        if (x % 16 < 5 || x % 16 > 10) continue;
+        let y = row; while (y > row - 8 && d[(y * 256 + x) * 4 + 3] === 0) y--;
+        if (d[(y * 256 + x) * 4 + 3] === 0) continue;
+        g.fillRect(x, y, 1, 4 + Math.floor(rng() * 9));
+      }
+      return texFrom(c);
+    }
+    function stampTexture(lines, w, h, size, seed) {
+      const rng = mulberry32(seed), c = makeCanvas(w, h), g = c.getContext("2d");
+      const lh = h / lines.length;
+      lines.forEach((ln, i) => hardText(g, ln, w / 2, Math.round(i * lh + (lh - size) / 2), `${size}px PS2P`, "#a3241a", "center"));
+      // spray speckle around and erosion inside the stencil
+      const img = g.getImageData(0, 0, w, h), a = img.data;
+      for (let i = 0; i < a.length; i += 4) {
+        if (a[i + 3] && rng() < 0.07) a[i + 3] = 0;
+        else if (!a[i + 3] && rng() < 0.012) { a[i] = 120; a[i + 1] = 24; a[i + 2] = 18; a[i + 3] = 255; }
+      }
+      g.putImageData(img, 0, 0);
+      return texFrom(c);
+    }
+
+    function plane(w, h, mat) { return new THREE.Mesh(new THREE.PlaneGeometry(w, h), mat); }
+
+    const CW = 2.4, CH = 2.7, CL = 10; // corridor
+    function buildCorridor(z0, copy, T) {
+      const grp = new THREE.Group(); scene.add(grp);
+      const wallMatL = lam({ map: T.wall.clone() }); wallMatL.map.repeat.set(CL / 2, 1); wallMatL.map.needsUpdate = true;
+      const floorMat = lam({ map: T.floor.clone() }); floorMat.map.repeat.set(CW / 1.2, CL / 1.2); floorMat.map.needsUpdate = true;
+      const ceilMat = lam({ map: T.ceil.clone() }); ceilMat.map.repeat.set(CW / 1.2, CL / 1.2); ceilMat.map.needsUpdate = true;
+      const fl = plane(CW, CL, floorMat); fl.rotation.x = -Math.PI / 2; fl.position.set(0, 0, z0 - CL / 2); grp.add(fl);
+      const ce = plane(CW, CL, ceilMat); ce.rotation.x = Math.PI / 2; ce.position.set(0, CH, z0 - CL / 2); grp.add(ce);
+      const wl = plane(CL, CH, wallMatL); wl.rotation.y = Math.PI / 2; wl.position.set(-CW / 2, CH / 2, z0 - CL / 2); grp.add(wl);
+      const wr = plane(CL, CH, wallMatL); wr.rotation.y = -Math.PI / 2; wr.position.set(CW / 2, CH / 2, z0 - CL / 2); grp.add(wr);
+      // end wall with a door opening (faces +Z)
+      const ze = z0 - CL;
+      const endMat = lam({ map: T.wall.clone() }); endMat.map.repeat.set(0.35, 1); endMat.map.needsUpdate = true;
+      const sideW = (CW - 1.0) / 2;
+      const e1 = plane(sideW, CH, endMat); e1.position.set(-CW / 2 + sideW / 2, CH / 2, ze); grp.add(e1);
+      const e2 = plane(sideW, CH, endMat); e2.position.set(CW / 2 - sideW / 2, CH / 2, ze); grp.add(e2);
+      const topMat = lam({ color: 0x34362f });
+      const e3 = plane(1.0, CH - 2.1, topMat); e3.position.set(0, 2.1 + (CH - 2.1) / 2, ze); grp.add(e3);
+      // frame
+      const frameMat = lam({ color: 0x23231f });
+      [[-0.53, 1.05, 0.06, 2.1], [0.53, 1.05, 0.06, 2.1], [0, 2.13, 1.12, 0.06]].forEach(([x, y, w, h]) => {
+        const b = new THREE.Mesh(new THREE.BoxGeometry(w, h, 0.08), frameMat); b.position.set(x, y, ze + 0.02); grp.add(b);
+      });
+      // door (hinged on the left)
+      const hinge = new THREE.Group(); hinge.position.set(-0.5, 0, ze); grp.add(hinge);
+      const doorMats = [frameMat, frameMat, frameMat, frameMat, lam({ map: T.door }), lam({ map: T.door })];
+      const door = new THREE.Mesh(new THREE.BoxGeometry(1.0, 2.08, 0.05), doorMats); door.position.set(0.5, 1.04, -0.01); hinge.add(door);
+      // the green sign
+      const signMat = basic({ map: T.sign, fog: false });
+      const sign = new THREE.Mesh(new THREE.BoxGeometry(0.78, 0.26, 0.06), [frameMat, frameMat, frameMat, frameMat, signMat, frameMat]);
+      sign.position.set(0, 2.42, ze + 0.06); grp.add(sign);
+      const signLight = new THREE.PointLight(0x3dd16a, 0, 3.2, 1.6); signLight.position.set(0, 2.3, ze + 0.4); scene.add(signLight);
+      // lamps
+      const lamps = [];
+      [z0 - 1.6, z0 - 5.0, z0 - 8.4].forEach((z) => {
+        const m = basic({ color: 0xffffff });
+        const fx = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.05, 0.6), m); fx.position.set(0, CH - 0.03, z); grp.add(fx);
+        const pl = new THREE.PointLight(0xd9dcc0, 0, 6.5, 1.4); pl.position.set(0, CH - 0.25, z); scene.add(pl);
+        lamps.push({ m, pl });
+      });
+      // pipes
+      const pipeMat = lam({ color: 0x3b332c });
+      [[0.92, 2.52, 0.07], [0.72, 2.58, 0.04]].forEach(([x, y, r]) => {
+        const p = new THREE.Mesh(new THREE.CylinderGeometry(r, r, CL, 6), pipeMat); p.rotation.x = Math.PI / 2; p.position.set(x, y, z0 - CL / 2); grp.add(p);
+      });
+      // closed side doors (the repeating-doors motif)
+      [z0 - 2.9, z0 - 6.9].forEach((z) => {
+        const sd = plane(0.95, 2.05, lam({ map: T.sideDoor })); sd.rotation.y = -Math.PI / 2; sd.position.set(CW / 2 - 0.012, 1.025, z); grp.add(sd);
+        const fr = new THREE.Mesh(new THREE.BoxGeometry(0.06, 2.12, 1.05), frameMat); fr.position.set(CW / 2 - 0.02, 1.06, z); grp.add(fr);
+        fr.scale.set(1, 1, 1);
+      });
+      const rad = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.55, 0.9), lam({ color: 0x3a3b36 })); rad.position.set(-CW / 2 + 0.07, 0.45, z0 - 6.2); grp.add(rad);
+      // L1 painted line, already on the wall
+      const gm = lam({ map: T.graffiti, transparent: false, alphaTest: 0.5, emissive: 0x3a0806, emissiveMap: T.graffiti, emissiveIntensity: 0.0 });
+      const gr = plane(2.3, 0.72, gm); gr.rotation.y = Math.PI / 2; gr.position.set(-CW / 2 + 0.012, 1.55, z0 - 3.6); grp.add(gr);
+      // stamps "СТОЛЬКО ПРОБЛЕМ"
+      const stamps = [];
+      function stamp(tex, w, h, pos, rotY, rotX, rz, ts, parent) {
+        const m = lam({ map: tex, alphaTest: 0.5, emissive: 0xff3a20, emissiveMap: tex, emissiveIntensity: 0, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
+        const p = plane(w, h, m); p.position.set(...pos); p.rotation.order = "YXZ"; p.rotation.set(rotX, rotY, rz);
+        (parent || grp).add(p); stamps.push({ p, m, ts });
+      }
+      const L = Math.PI / 2;
+      stamp(T.stamp2, 0.86, 0.32, [0, 0.3, 0.032], 0, 0, -0.04, STAMPS_A[0], door);
+      stamp(T.stamp1, 1.7, 0.21, [-CW / 2 + 0.014, 1.55, ze + 1.1], L, 0, 0.03, STAMPS_A[1]);
+      stamp(T.stamp1, 1.7, 0.21, [CW / 2 - 0.014, 1.35, ze + 1.15], -L, 0, -0.05, STAMPS_A[2]);
+      stamp(T.stamp1, 1.5, 0.19, [-CW / 2 + 0.014, 2.05, ze + 2.9], L, 0, -0.06, BURSTS[0]);
+      stamp(T.stamp1, 1.5, 0.19, [CW / 2 - 0.014, 0.8, ze + 2.6], -L, 0, 0.04, BURSTS[0]);
+      stamp(T.stamp1, 1.4, 0.175, [-CW / 2 + 0.014, 0.75, ze + 2.4], L, 0, 0.08, BURSTS[0]);
+      stamp(T.stamp1, 1.7, 0.21, [0, CH - 0.012, ze + 2.1], 0, L, 0.1, BURSTS[1]);
+      stamp(T.stamp1, 1.7, 0.21, [0.05, 0.012, ze + 1.4], 0, -L, -0.07, BURSTS[1]);
+      stamp(T.stamp1, 1.5, 0.19, [CW / 2 - 0.014, 1.85, ze + 4.2], -L, 0, -0.03, BURSTS[1]);
+      stamp(T.stamp1, 1.5, 0.19, [-CW / 2 + 0.014, 1.25, ze + 4.6], L, 0, 0.05, BURSTS[2]);
+      stamp(T.stamp1, 1.4, 0.175, [CW / 2 - 0.014, 2.2, ze + 1.8], -L, 0, 0.06, BURSTS[2]);
+      stamp(T.stamp2, 0.62, 0.23, [-0.85, 1.0, ze + 0.014], 0, 0, 0.05, BURSTS[2]);
+      stamp(T.stamp2, 0.62, 0.23, [0.86, 1.65, ze + 0.014], 0, 0, -0.06, BURSTS[2]);
+      return { grp, hinge, signMat, signLight, lamps, stamps, gm, z0 };
+    }
+
+    // circle text on the floor of the second corridor
+    const CIRC = "И Я НЕ ЗНАЮ КАК МНЕ ВЫЙТИ С ЭТОГО КРУГА";
+    const SLOTS = 44;
+    const dTh = (Math.PI * 2) / SLOTS;
+    const TH0 = -5 * dTh; // "И Я НЕ ЗНАЮ" centred on the far side
+    const charTimes = [];
+    (function () {
+      let ci = 0;
+      L5.forEach(([w, s], wi) => {
+        const next = wi < L5.length - 1 ? L5[wi + 1][1] : s + 0.5;
+        const span = Math.min(0.3, Math.max(0.05, next - s - 0.02));
+        for (let k = 0; k < w.length; k++) charTimes[ci + k] = s + (span * k) / w.length;
+        ci += w.length;
+        if (ci < CIRC.length) { charTimes[ci] = charTimes[ci - 1]; ci++; } // space
+      });
+    })();
+    const wordCenterTh = [];
+    (function () {
+      let ci = 0;
+      L5.forEach(([w, s]) => { wordCenterTh.push([s, TH0 + (ci + (w.length - 1) / 2) * dTh]); ci += w.length + 1; });
+    })();
+    function circleState(t) { let n = 0; for (let i = 0; i < CIRC.length; i++) if (t >= charTimes[i]) n = i + 1; return n; }
+    function drawCircle(g, n, t) {
+      g.clearRect(0, 0, 1024, 1024);
+      const cx = 512, cy = 512, R = 414;
+      // dim rings, always there
+      g.lineWidth = 6;
+      g.strokeStyle = "#2b0b08"; g.beginPath(); g.arc(cx, cy, 486, 0, Math.PI * 2); g.stroke();
+      g.beginPath(); g.arc(cx, cy, 342, 0, Math.PI * 2); g.stroke();
+      // bright arc traces the reading position
+      if (n > 0) {
+        const a0 = TH0 - dTh / 2 - Math.PI / 2, a1 = TH0 + (n - 0.5) * dTh - Math.PI / 2;
+        const full = n >= CIRC.length && t >= 11.95;
+        g.strokeStyle = "#c2321c";
+        g.beginPath(); g.arc(cx, cy, 486, full ? 0 : a0, full ? Math.PI * 2 : a1); g.stroke();
+        g.beginPath(); g.arc(cx, cy, 342, full ? 0 : a0, full ? Math.PI * 2 : a1); g.stroke();
+      }
+      g.font = "48px PS2P"; g.textAlign = "center"; g.textBaseline = "middle";
+      for (let i = 0; i < CIRC.length; i++) {
+        const ch = CIRC[i]; if (ch === " ") continue;
+        const th = TH0 + i * dTh;
+        g.save(); g.translate(cx + R * Math.sin(th), cy - R * Math.cos(th)); g.rotate(th);
+        const lit = i < n, fresh = lit && t - charTimes[i] < 0.1;
+        g.fillStyle = fresh ? "#ffb27a" : lit ? "#d23a20" : "#2a0d0a";
+        g.fillText(ch, 0, 3); g.restore();
+      }
+      // closing mark
+      g.fillStyle = n >= CIRC.length ? "#d23a20" : "#2a0d0a";
+      const thm = TH0 + (CIRC.length + 1.5) * dTh;
+      g.fillRect(Math.round(cx + R * Math.sin(thm)) - 6, Math.round(cy - R * Math.cos(thm)) - 6, 12, 12);
+      hardAlpha(g, 1024, 1024);
+    }
+
+    // ---------- room ----------
+    const RX = 40;
+    function roomTextures() {
+      const rng = mulberry32(31);
+      const wp = makeCanvas(64, 64), g = wp.getContext("2d");
+      noiseFill(g, 64, 64, "#33363c", 0.1, rng);
+      for (let x = 0; x < 64; x += 16) { g.fillStyle = "rgba(255,255,255,0.05)"; g.fillRect(x, 0, 6, 64); }
+      for (let y = 4; y < 64; y += 16) for (let x = 11; x < 64; x += 16) { g.fillStyle = "rgba(0,0,0,0.25)"; g.fillRect(x, y, 2, 2); }
+      for (let i = 0; i < 4; i++) { g.fillStyle = `rgba(40,30,15,${0.15 + rng() * 0.2})`; g.fillRect(Math.floor(rng() * 50), Math.floor(rng() * 40), 8 + Math.floor(rng() * 10), 10 + Math.floor(rng() * 20)); }
+      const wood = makeCanvas(64, 64), w = wood.getContext("2d");
+      noiseFill(w, 64, 64, "#2d2119", 0.12, mulberry32(8));
+      for (let y = 0; y < 64; y += 8) { w.fillStyle = "rgba(0,0,0,0.45)"; w.fillRect(0, y, 64, 1); w.fillRect((y * 7) % 64, y, 1, 8); }
+      const bl = makeCanvas(32, 32), b = bl.getContext("2d");
+      for (let y = 0; y < 4; y++) for (let x = 0; x < 4; x++) { b.fillStyle = (x + y) % 2 ? "#3d2324" : "#2e1c1e"; b.fillRect(x * 8, y * 8, 8, 8); }
+      const crt = makeCanvas(16, 16), cg = crt.getContext("2d"); noiseFill(cg, 16, 16, "#7e786a", 0.12, mulberry32(4));
+      const win = makeCanvas(32, 48), wg = win.getContext("2d");
+      wg.fillStyle = "#06080e"; wg.fillRect(0, 0, 32, 48);
+      for (let y = 2; y < 46; y += 4) { wg.fillStyle = "#33405e"; wg.fillRect(2, y, 28, 2); }
+      wg.fillStyle = "#14161a"; wg.fillRect(0, 0, 32, 2); wg.fillRect(0, 46, 32, 2); wg.fillRect(0, 0, 2, 48); wg.fillRect(30, 0, 2, 48);
+      return { wall: texFrom(wp, true), wood: texFrom(wood, true), blanket: texFrom(bl, true), crt: texFrom(crt, true), win: texFrom(win) };
+    }
+    function buildRoom() {
+      const T = roomTextures(), grp = new THREE.Group(); grp.position.set(RX, 0, 0); scene.add(grp);
+      const RW = 4.4, RD = 4.4, RH = 2.6;
+      const wallM = lam({ map: T.wall }); wallM.map.repeat.set(RW, RH); wallM.map.needsUpdate = true;
+      const floorM = lam({ map: T.wood }); floorM.map.repeat.set(RW / 1.4, RD / 1.4); floorM.map.needsUpdate = true;
+      const f = plane(RW, RD, floorM); f.rotation.x = -Math.PI / 2; grp.add(f);
+      const c = plane(RW, RD, lam({ color: 0x24242a })); c.rotation.x = Math.PI / 2; c.position.y = RH; grp.add(c);
+      const back = plane(RW, RH, wallM); back.position.set(0, RH / 2, -RD / 2); grp.add(back);
+      const front = plane(RW, RH, wallM); front.rotation.y = Math.PI; front.position.set(0, RH / 2, RD / 2); grp.add(front);
+      const left = plane(RD, RH, wallM); left.rotation.y = Math.PI / 2; left.position.set(-RW / 2, RH / 2, 0); grp.add(left);
+      const right = plane(RD, RH, wallM); right.rotation.y = -Math.PI / 2; right.position.set(RW / 2, RH / 2, 0); grp.add(right);
+      // window with blinds (pre-dawn)
+      const win = plane(0.9, 1.3, basic({ map: T.win })); win.rotation.y = -Math.PI / 2; win.position.set(RW / 2 - 0.01, 1.45, 0.1); grp.add(win);
+      const winLight = new THREE.SpotLight(0x5c74b0, 2.2, 6, 0.7, 0.8, 1.2); winLight.position.set(RX + 2.1, 1.6, 0.1); winLight.target.position.set(RX - 1.6, 0.4, -1.0); scene.add(winLight); scene.add(winLight.target);
+      // desk
+      const woodM = lam({ color: 0x3a2b20 });
+      const top = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.06, 0.8), woodM); top.position.set(0.3, 0.75, -1.8); grp.add(top);
+      [[-0.75], [1.35]].forEach(([x]) => { const l = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.75, 0.75), woodM); l.position.set(x, 0.375, -1.8); grp.add(l); });
+      // CRT
+      const crtM = lam({ map: T.crt });
+      const body = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.42, 0.42), crtM); body.position.set(0.2, 0.99, -1.88); grp.add(body);
+      const tail = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.3, 0.26), crtM); tail.position.set(0.2, 0.98, -2.1); grp.add(tail);
+      const scrC = makeCanvas(192, 144), scrG = scrC.getContext("2d", { willReadFrequently: true });
+      const scrT = texFrom(scrC);
+      const screen = plane(0.38, 0.285, basic({ map: scrT, fog: false })); screen.position.set(0.2, 1.01, -1.668); grp.add(screen);
+      const kb = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.03, 0.15), lam({ color: 0x5e5a50 })); kb.position.set(0.2, 0.795, -1.5); kb.rotation.y = 0.04; grp.add(kb);
+      const crtLight = new THREE.PointLight(0x8aaed6, 0, 3.6, 1.3); crtLight.position.set(RX + 0.2, 1.05, -1.3); scene.add(crtLight);
+      // clock
+      const ck = new THREE.Group(); ck.position.set(1.2, 0.78, -1.82); ck.rotation.y = -0.35; grp.add(ck);
+      const ckBody = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.17, 0.12), lam({ color: 0x141414 })); ckBody.position.y = 0.085; ck.add(ckBody);
+      const ckC = makeCanvas(96, 48), ckG = ckC.getContext("2d", { willReadFrequently: true }), ckT = texFrom(ckC);
+      const face = plane(0.3, 0.15, basic({ map: ckT, fog: false })); face.position.set(0, 0.085, 0.061); ck.add(face);
+      const ckLight = new THREE.PointLight(0xff3018, 0, 1.4, 1.5); ckLight.position.set(RX + 1.1, 0.95, -1.6); scene.add(ckLight);
+      // bed
+      const bedM = lam({ color: 0x2a2420 });
+      const frame = new THREE.Mesh(new THREE.BoxGeometry(0.95, 0.32, 2.0), bedM); frame.position.set(-1.7, 0.16, -1.15); grp.add(frame);
+      const blM = lam({ map: T.blanket }); blM.map.repeat.set(2, 4); blM.map.needsUpdate = true;
+      const mat = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.16, 1.95), blM); mat.position.set(-1.7, 0.4, -1.15); grp.add(mat);
+      const pil = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.12, 0.34), lam({ color: 0x6d6a66 })); pil.position.set(-1.7, 0.53, -1.9); pil.rotation.y = 0.05; grp.add(pil);
+      // chair
+      const chM = lam({ color: 0x1d1d1f });
+      const seat = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.05, 0.45), chM); seat.position.set(0.25, 0.47, -1.05); grp.add(seat);
+      const cb = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.45, 0.05), chM); cb.position.set(0.25, 0.72, -0.82); grp.add(cb);
+      // tally wall over the bed
+      const tlC = makeCanvas(256, 128), tlG = tlC.getContext("2d", { willReadFrequently: true }), tlT = texFrom(tlC);
+      const tm = lam({ map: tlT, alphaTest: 0.5, emissive: 0xffffff, emissiveMap: tlT, emissiveIntensity: 0.32 });
+      const tally = plane(1.7, 0.85, tm); tally.rotation.y = Math.PI / 2; tally.position.set(-RW / 2 + 0.012, 1.45, -1.1); grp.add(tally);
+      const door = plane(0.95, 2.05, lam({ map: doorTexture("#3b2b22", 61) })); door.rotation.y = Math.PI; door.position.set(-0.3, 1.025, RD / 2 - 0.01); grp.add(door);
+      return { grp, winLight, crtLight, ckLight, scr: { g: scrG, t: scrT, key: "" }, ck: { g: ckG, t: ckT, key: "" }, tl: { g: tlG, t: tlT, key: "" }, screen };
+    }
+
+    // tally marks (pre-generated, seeded)
+    const tallyStrokes = (function () {
+      const rng = mulberry32(99), out = [];
+      let gx = 10, gy = 8, groups = 0;
+      while (groups < 19) {
+        const jit = () => Math.floor(rng() * 3) - 1;
+        for (let k = 0; k < 4; k++) out.push({ x0: gx + k * 5 + jit(), y0: gy + jit(), x1: gx + k * 5 + jit(), y1: gy + 20 + jit() });
+        out.push({ x0: gx - 2, y0: gy + 15, x1: gx + 19, y1: gy + 4, diag: true });
+        groups++; gx += 30; if (gx > 220) { gx = 10 + Math.floor(rng() * 8); gy += 26; }
+      }
+      // the last, unfinished group
+      for (let k = 0; k < 3; k++) out.push({ x0: gx + k * 5, y0: gy, x1: gx + k * 5 + 1, y1: gy + 20 });
+      out.push({ x0: gx + 15, y0: gy, x1: gx + 16, y1: gy + 20, late: 15.18 });
+      return out;
+    })();
+    function line(g, x0, y0, x1, y1) {
+      const n = Math.max(Math.abs(x1 - x0), Math.abs(y1 - y0));
+      for (let i = 0; i <= n; i++) g.fillRect(Math.round(lerp(x0, x1, i / n)), Math.round(lerp(y0, y1, i / n)), 2, 1);
+    }
+    const TALLY_WORDS = [["Я", 14.08], ["СНОВА", 14.38], ["НЕ", 14.8], ["СПЛЮ", 15.18]];
+    function drawTally(R, t) {
+      const nW = TALLY_WORDS.filter((w) => t >= w[1]).length;
+      const late = t >= 15.18 ? 1 : 0;
+      const key = nW + "|" + late; if (key === R.key) return; R.key = key;
+      const g = R.g; g.clearRect(0, 0, 256, 128);
+      g.fillStyle = "#b8b0a0";
+      tallyStrokes.forEach((s) => { if (s.late && !late) return; line(g, s.x0, s.y0, s.x1, s.y1); });
+      const full = TALLY_WORDS.map((w) => w[0]).join(" ");
+      let x = 128 - full.length * 8;
+      TALLY_WORDS.forEach(([w], i) => {
+        if (i < nW) hardText(g, w, x, 96, "16px PS2P", "#cfc6b2");
+        x += (w.length + 1) * 16;
+      });
+      R.t.needsUpdate = true;
+    }
+    function drawClock(R, t) {
+      const colon = Math.floor((t - CUT_ROOM) / BEAT) % 2 === 0;
+      const l1 = t >= 12.46 ? 2 : t >= 12.28 ? 1 : 0;
+      const l3 = t >= 13.48 ? 2 : t >= 13.2 ? 1 : 0;
+      const hot = t >= 13.2 && t < 13.38;
+      const key = [colon, l1, l3, hot].join("|"); if (key === R.key) return; R.key = key;
+      const g = R.g, OFF = "#2c0906", ON = "#ff3d24", HOT = "#ffd2b8";
+      g.fillStyle = "#0d0302"; g.fillRect(0, 0, 96, 48);
+      hardText(g, "НА ЧАСАХ", 48, 2, "8px PS2P", OFF, "center");
+      if (l1 >= 1) hardText(g, "НА", 16, 2, "8px PS2P", ON);
+      if (l1 >= 2) hardText(g, "НА ЧАСАХ", 48, 2, "8px PS2P", ON, "center");
+      const big = hot ? HOT : ON;
+      hardText(g, "05", 8, 15, "16px PS2P", big);
+      if (colon) hardText(g, ":", 40, 15, "16px PS2P", big);
+      hardText(g, "00", 56, 15, "16px PS2P", big);
+      hardText(g, "ПЯТЬ УТРА", 48, 37, "8px PS2P", OFF, "center");
+      if (l3 >= 1) hardText(g, "ПЯТЬ", 12, 37, "8px PS2P", ON);
+      if (l3 >= 2) hardText(g, "ПЯТЬ УТРА", 48, 37, "8px PS2P", ON, "center");
+      R.t.needsUpdate = true;
+    }
+    function drawScreen(R, t) {
+      const MON = "МОНИТОРЮ";
+      const typed = t < 15.6 ? 0 : Math.min(MON.length, 1 + Math.floor((t - 15.6) / 0.11));
+      const title = t >= 17.04 ? 2 : t >= 16.8 ? 1 : 0;
+      const pop = t >= 17.3;
+      const l2 = t >= 18.68 ? 3 : t >= 18.34 ? 2 : t >= 18.04 ? 1 : 0;
+      const dots = t >= 18.9 ? Math.floor((t - 18.9) / 0.21) % 4 : -1;
+      const blink = Math.floor(t / BEAT) % 2;
+      const ring = pop && t < 18.9 ? Math.floor((t - 17.3) / (BEAT / 2)) % 2 : 0;
+      const roll = Math.floor(t * 6) % 36; // slow rolling scan bar
+      const key = [typed, title, pop, l2, dots, blink, ring, roll].join("|"); if (key === R.key) return; R.key = key;
+      // messenger-style channel feed on a blue-tinted tube
+      const g = R.g, AC = "#7fb6e6", DK = "#08101c", BAR = "#18304a", BUB = "#15253a", TX = "#dcebf8", LN = "#4c6a88";
+      g.fillStyle = DK; g.fillRect(0, 0, 192, 144);
+      g.fillStyle = "rgba(127,182,230,0.07)";
+      for (let y = 6; y < 144; y += 12) for (let x = (y % 24 ? 3 : 9); x < 192; x += 12) g.fillRect(x, y, 2, 2);
+      g.fillStyle = "rgba(127,182,230,0.05)"; g.fillRect(0, roll * 4, 192, 10);
+      // app bar: connection-style status, typed with the word
+      g.fillStyle = BAR; g.fillRect(0, 0, 192, 24);
+      hardText(g, "<", 4, 4, "16px PS2P", AC);
+      hardText(g, MON.slice(0, typed), 24, 4, "16px PS2P", TX);
+      if (typed < MON.length && blink) { g.fillStyle = AC; g.fillRect(24 + typed * 16, 18, 14, 2); }
+      if (typed === MON.length) for (let k = 0; k <= blink; k++) { g.fillStyle = AC; g.fillRect(156 + k * 6, 16, 3, 3); }
+      if (title) {
+        // channel header: round avatar + name
+        g.fillStyle = "#0f1d2e"; g.fillRect(0, 24, 192, 28);
+        g.fillStyle = AC; g.beginPath(); g.arc(13, 38, 10, 0, Math.PI * 2); g.fill();
+        g.fillStyle = DK; g.beginPath(); g.moveTo(7, 38); g.lineTo(19, 33); g.lineTo(16, 44); g.lineTo(13, 40); g.closePath(); g.fill();
+        hardText(g, title === 2 ? "ТВОЙ КАНАЛ" : "ТВОЙ", 28, 31, "16px PS2P", TX);
+        g.fillStyle = "#24405e"; g.fillRect(0, 51, 192, 1);
+        // posts: bubbles with placeholder lines and a view counter eye
+        const bubble = (x, y, w, h) => {
+          g.fillStyle = BUB; g.fillRect(x + 2, y, w - 4, h); g.fillRect(x, y + 2, w, h - 4);
+          g.fillRect(x - 3, y + h - 4, 5, 4);
+        };
+        bubble(8, 58, 150, 36);
+        g.fillStyle = LN; g.fillRect(14, 64, 120, 4); g.fillRect(14, 72, 136, 4); g.fillRect(14, 80, 84, 4);
+        bubble(8, 100, 174, 38);
+        g.fillStyle = "#223a56"; g.fillRect(14, 104, 60, 30);
+        g.fillStyle = LN; g.fillRect(80, 106, 92, 4); g.fillRect(80, 114, 70, 4);
+        [[136, 87], [160, 129]].forEach(([ex, ey]) => {
+          g.fillStyle = "#6f8fae"; g.fillRect(ex, ey + 1, 9, 3); g.fillRect(ex + 2, ey, 5, 5);
+          g.fillStyle = BUB; g.fillRect(ex + 4, ey + 2, 1, 1);
+        });
+      }
+      if (pop) {
+        g.fillStyle = DK; g.fillRect(8, 58, 176, 80);
+        g.fillStyle = TX; g.fillRect(8, 58, 176, 2); g.fillRect(8, 136, 176, 2); g.fillRect(8, 58, 2, 80); g.fillRect(182, 58, 2, 80);
+        // pixel handset icon
+        const ix = 16 + ring, iy = 66;
+        g.fillStyle = AC; g.fillRect(ix, iy, 6, 8); g.fillRect(ix + 2, iy + 6, 4, 10); g.fillRect(ix, iy + 14, 6, 8); g.fillRect(ix + 6, iy + 2, 2, 4); g.fillRect(ix + 6, iy + 16, 2, 4);
+        if (ring) { g.fillRect(ix + 11, iy + 6, 2, 10); g.fillRect(ix + 15, iy + 3, 2, 16); }
+        hardText(g, "ЗВОНКА", 48, 70, "16px PS2P", TX);
+        const parts = ["ОТ", "ОТ ТЯ", "ОТ ТЯ ЖДУ"];
+        if (l2) hardText(g, parts[l2 - 1], 20, 96, "16px PS2P", TX);
+        if (dots >= 0) hardText(g, ".".repeat(dots), 20, 118, "16px PS2P", AC);
+      }
+      // scan lines baked into the tube
+      g.fillStyle = "rgba(0,0,0,0.22)"; for (let y = 0; y < 144; y += 3) g.fillRect(0, y, 192, 1);
+      R.t.needsUpdate = true;
+    }
+
+    async function build() {
+      await fontsReady;
+      const T = {
+        wall: wallTexture(), floor: floorTexture(), ceil: ceilTexture(),
+        door: doorTexture("#454b43", 3), sideDoor: doorTexture("#33281f", 9), sign: signTexture(), graffiti: graffitiTexture(),
+        stamp1: stampTexture(["СТОЛЬКО ПРОБЛЕМ"], 256, 32, 16, 12), stamp2: stampTexture(["СТОЛЬКО", "ПРОБЛЕМ"], 128, 48, 16, 13),
+      };
+      S.c0 = buildCorridor(0, 0, T);
+      S.c1 = buildCorridor(-CL, 1, T);
+      // copy 0 also has a door behind the start (never opens)
+      const back = buildBackWall(T); S.back = back;
+      // circle
+      const cc = makeCanvas(1024, 1024), cg = cc.getContext("2d", { willReadFrequently: true }), ct = texFrom(cc);
+      const circ = plane(2.3, 2.3, basic({ map: ct, alphaTest: 0.5, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }));
+      circ.rotation.x = -Math.PI / 2; circ.position.set(0, 0.012, -12.0); scene.add(circ);
+      S.circ = { g: cg, t: ct, key: "" };
+      S.room = buildRoom();
+      built = true;
+      renderAt(pending ?? (window.__hfThreeTime || 0));
+      window.__worldBuilt && window.__worldBuilt();
+    }
+    function buildBackWall(T) {
+      const m = lam({ map: T.wall.clone() }); m.map.repeat.set(1.2, 1); m.map.needsUpdate = true;
+      const w = plane(CW, CH, m); w.rotation.y = Math.PI; w.position.set(0, CH / 2, 0); scene.add(w);
+      const d = plane(1.0, 2.08, lam({ map: T.door })); d.rotation.y = Math.PI; d.position.set(0, 1.04, -0.01); scene.add(d);
+      return w;
+    }
+
+    // ---------- camera tracks ----------
+    function makeTrack(keys) {
+      const n = keys.length, fields = ["p", "o", "roll", "fov"];
+      const val = (k, f) => (Array.isArray(k[f]) ? k[f] : [k[f]]);
+      const tan = keys.map((k, i) => {
+        const z = {}; fields.forEach((f) => (z[f] = val(k, f).map(() => 0)));
+        if (k.hold || i === 0 || i === n - 1) return z;
+        const a = keys[i - 1], b = keys[i + 1], dt = b.t - a.t;
+        fields.forEach((f) => (z[f] = val(b, f).map((v, j) => (v - val(a, f)[j]) / dt)));
+        return z;
+      });
+      return function (t) {
+        let i = 0;
+        if (t <= keys[0].t) i = 0; else if (t >= keys[n - 1].t) i = n - 2; else while (keys[i + 1].t < t) i++;
+        const a = keys[i], b = keys[i + 1], dt = b.t - a.t, u = clamp((t - a.t) / dt, 0, 1);
+        const h00 = 2 * u ** 3 - 3 * u ** 2 + 1, h10 = u ** 3 - 2 * u ** 2 + u, h01 = -2 * u ** 3 + 3 * u ** 2, h11 = u ** 3 - u ** 2;
+        const out = {};
+        fields.forEach((f) => {
+          const va = val(a, f), vb = val(b, f), ma = tan[i][f], mb = tan[i + 1][f];
+          out[f] = va.map((v, j) => h00 * v + h10 * dt * ma[j] + h01 * vb[j] + h11 * dt * mb[j]);
+        });
+        return out;
+      };
+    }
+    // corridor: o = [yaw, pitch]
+    const K = (t, p, yaw, pitch = 0, roll = 0, hold = false) => ({ t, p, o: [yaw, pitch], roll, fov: 70, hold });
+    const shotA = makeTrack([
+      K(0.0, [0.35, 1.62, -2.5], 0.8, 0.0),
+      K(0.5, [0.32, 1.62, -2.62], 1.12, -0.02),
+      K(1.3, [0.25, 1.61, -2.82], 1.2, -0.04),
+      K(2.12, [0.18, 1.61, -3.0], 1.14, -0.03),
+      K(2.8, [0.05, 1.62, -3.45], 0.12, 0.0),
+      K(3.6, [0.0, 1.62, -4.8], 0.02, 0.0),
+      K(4.45, [-0.02, 1.62, -6.6], 0.0, 0.0),
+      K(5.25, [0.0, 1.62, -8.3], 0.0, 0.0, 0, true),
+      K(6.45, [0.0, 1.62, -7.5], 0.0, 0.03, 0, true),
+      K(7.02, [0.0, 1.62, -7.5], 0.0, 0.03, 0, true),
+      K(9.18, [0.0, 1.62, -8.5], 0.0, 0.0, 0.04),
+      K(9.65, [0.0, 1.61, -9.25], 0.0, -0.3, 0.02),
+      K(10.25, [0.0, 1.6, -10.85], 0.0, -0.85, 0.0),
+      K(10.7, [0.0, 1.62, -11.75], 0.0, -1.38, 0.0),
+      K(CUT_ROOM, [0.0, 1.62, -12.0], 0.0, -1.48, 0.0, true),
+    ]);
+    // camera follows the reading position round the circle
+    const yawCircle = makeTrack([
+      { t: 10.0, p: [0], o: [0], roll: 0, fov: 0, hold: true },
+      ...wordCenterTh.slice(4).map(([s, th]) => ({ t: s + 0.12, p: [-th], o: [0], roll: 0, fov: 0 })),
+      { t: 12.2, p: [-wordCenterTh[wordCenterTh.length - 1][1] - 0.25], o: [0], roll: 0, fov: 0, hold: true },
+    ]);
+    // room: o = look target
+    const R = (t, p, o, roll = 0, hold = false) => ({ t, p: [p[0] + RX, p[1], p[2]], o: [o[0] + RX, o[1], o[2]], roll, fov: 60, hold });
+    const shotB = makeTrack([
+      R(CUT_ROOM, [0.4, 1.55, 1.7], [1.2, 0.86, -1.8]),
+      R(13.15, [0.98, 1.08, -1.0], [1.2, 0.86, -1.8]),
+      R(14.02, [1.07, 0.98, -1.36], [1.2, 0.86, -1.8], 0, true),
+      R(14.12, [1.07, 0.98, -1.36], [1.2, 0.86, -1.8], 0, true),
+      R(14.6, [-0.1, 1.3, -0.95], [-2.2, 1.43, -1.1]),
+      R(15.38, [-0.3, 1.32, -1.0], [-2.2, 1.45, -1.12]),
+      R(15.9, [0.2, 1.18, -0.72], [0.2, 1.02, -1.67]),
+      R(16.55, [0.2, 1.06, -1.2], [0.2, 1.02, -1.67]),
+      R(18.9, [0.19, 1.05, -1.25], [0.2, 1.02, -1.67], 0, true),
+      R(20.3, [0.15, 1.0, -0.92], [0.18, 0.88, -1.67], 0.07),
+      R(21.6, [-1.4, 0.78, -1.75], [1.5, 0.92, -0.8], -1.2),
+      R(CUT_DREAM, [-1.42, 0.76, -1.78], [1.5, 0.9, -0.8], -1.22, true),
+    ]);
+    const shotC = makeTrack([
+      { t: CUT_DREAM, p: [0.35, 0.24, -1.9], o: [0.15, 0.55, -10.0], roll: -1.3, fov: 70 },
+      { t: CUT_END, p: [0.35, 0.23, -1.95], o: [0.12, 0.6, -10.0], roll: -1.27, fov: 70 },
+    ]);
+
+    // ---------- light/state scripting ----------
+    function lampLevel(copy, i, t) {
+      if (t >= BLACKOUT && t < CUT_DREAM) return 0;
+      if (t >= CUT_DREAM) { if (copy) return 0; return [0.55 * flick(30 + i, t, 0.3, 0.1), 0.6 * flick(40 + i, t, 0.4, 0), 1.0 * flick(50 + i, t, 0.12, 0.3)][i]; }
+      if (t >= GAP[0] && t < GAP[1]) return 0;
+      if (copy && t < DOOR_OPEN) return 0;
+      const onAt = copy ? DOOR_OPEN : [2.21, 2.62, 3.09][i];
+      if (t < onAt) return 0;
+      const d = t - onAt;
+      if (d < 0.2) return [1, 0, 0.6, 0, 0, 1][Math.floor(d * FPS)] ?? 1;
+      let v = 1;
+      for (const ts of [...STAMPS_A, ...BURSTS]) { const k = t - ts; if (k >= 0 && k < 0.2) v *= 1 + 1.1 * (1 - k / 0.2); }
+      const rate = t > GAP[1] && t < DOOR_OPEN ? 0.16 : 0.04;
+      return v * flick(i * 7 + copy * 31, t, rate);
+    }
+    function flashLevel(t) {
+      if (t < 0.05) return 0;
+      if (t < 0.32) return [1, 0, 0, 1, 0.4, 1, 1, 1, 1][Math.floor((t - 0.05) * FPS)] ?? 1;
+      if (t >= GAP[0] && t < GAP[1]) return 0;
+      if (t >= BLACKOUT) return 0;
+      if (t >= GAP[1] && t < GAP[1] + 0.07) return 0.5;
+      return flick(3, t, 0.02, 0.6);
+    }
+    function signLevel(copy, t) {
+      if (copy) return t >= DOOR_OPEN && t < BLACKOUT ? 0.75 : 0;
+      if (t >= CUT_DREAM) return 1.0 * flick(9, t, 0.1, 0.4);
+      if (t >= BLACKOUT) return 0;
+      if (t < 3.98) return 0.5 * flick(2, t, 0.05, 0.5);
+      if (t < 4.5) return 0.85 + 1.4 * (1 - (t - 3.98) / 0.52);
+      if (t < STAMPS_A[0]) return 0.85;
+      if (t < 5.62) return [0.2, 0.9, 0, 0, 0.6, 0, 0, 0.3, 0][Math.floor((t - STAMPS_A[0]) * FPS)] ?? 0;
+      return 0;
+    }
+    const lidKeys = [
+      [0, 0], [BLACKOUT, 0], [CUT_ROOM - 0.01, 1], [CUT_ROOM, 1], [12.72, 0.22], [12.88, 0.38], [13.12, 0.0],
+      [19.0, 0.0], [19.5, 0.46], [19.78, 0.16], [20.2, 0.72], [20.42, 0.36], [21.0, 0.62], [21.55, 0.5], [22.32, 1.0],
+      [CUT_DREAM, 1.0], [23.08, 0.6], [23.48, 0.72], [23.82, 0.58], [24.3, 1.0], [30, 1.0],
+    ];
+    function lidAt(t) {
+      if (t < BLACKOUT) return 0;
+      if (t >= BLACKOUT && t < CUT_ROOM) return 0;
+      return clamp(env(lidKeys, t), 0, 1);
+    }
+    function fadeAt(t) {
+      if (t >= BLACKOUT && t < CUT_ROOM) return clamp(1 - (t - BLACKOUT) / 0.09, 0, 1);
+      if (t >= CUT_END) return 0;
+      return 1;
+    }
+    function tearAt(t) {
+      for (const [a, b] of [[6.46, 6.58], [GAP[1], 7.13], [BLACKOUT - 0.04, CUT_ROOM], [CUT_DREAM, 22.86]]) if (t >= a && t < b) return 1;
+      return 0;
+    }
+
+    const tmpV = new THREE.Vector3();
+    function setCam(pos, yaw, pitch, roll, fov) {
+      camera.position.set(pos[0], pos[1], pos[2]);
+      camera.rotation.order = "YXZ";
+      camera.rotation.set(pitch, yaw, roll);
+      if (camera.fov !== fov) { camera.fov = fov; camera.updateProjectionMatrix(); }
+    }
+
+    function renderAt(t) {
+      if (!built) { pending = t; return; }
+      t = clamp(t, 0, 26.68);
+      const f = frameOf(t);
+      const inRoom = t >= CUT_ROOM && t < CUT_DREAM;
+      // ----- camera
+      if (t < CUT_ROOM) {
+        const s = shotA(t);
+        let yaw = s.o[0], pitch = s.o[1];
+        if (t >= 10.0) { const y = yawCircle(t).p[0]; yaw = y; }
+        // footsteps on the beat while moving
+        const s2 = shotA(t + 0.05), sp = Math.hypot(s2.p[0] - s.p[0], s2.p[2] - s.p[2]) / 0.05;
+        const walk = clamp(sp / 1.6, 0, 1) * (t < 10.6 ? 1 : 0);
+        const ph = (t / BEAT) * Math.PI;
+        const pos = [s.p[0] + Math.sin(ph) * 0.025 * walk, s.p[1] - Math.abs(Math.sin(ph)) * 0.04 * walk, s.p[2]];
+        yaw += Math.sin(t * 0.9) * 0.01 + Math.sin(ph) * 0.006 * walk;
+        pitch += Math.sin(t * 1.3 + 1) * 0.008;
+        setCam(pos, yaw, Math.max(pitch, -1.5), s.roll[0] + Math.sin(ph) * 0.006 * walk, 70);
+        scene.fog.near = 0.5; scene.fog.far = 10.5;
+      } else if (inRoom) {
+        const s = shotB(t);
+        camera.position.set(s.p[0], s.p[1] + Math.sin(t * 1.1) * 0.006, s.p[2]);
+        camera.up.set(0, 1, 0);
+        tmpV.set(s.o[0] + Math.sin(t * 0.7) * 0.01, s.o[1] + Math.sin(t * 0.9 + 2) * 0.008, s.o[2]);
+        camera.lookAt(tmpV); camera.rotateZ(s.roll[0]);
+        if (camera.fov !== 60) { camera.fov = 60; camera.updateProjectionMatrix(); }
+        scene.fog.near = 1.2; scene.fog.far = 9;
+      } else {
+        const s = shotC(Math.min(t, CUT_END));
+        camera.position.set(s.p[0], s.p[1], s.p[2]); camera.up.set(0, 1, 0);
+        tmpV.set(s.o[0], s.o[1], s.o[2]); camera.lookAt(tmpV); camera.rotateZ(s.roll[0]);
+        if (camera.fov !== 70) { camera.fov = 70; camera.updateProjectionMatrix(); }
+        scene.fog.near = 0.5; scene.fog.far = 11;
+      }
+      // ----- corridor lights
+      [S.c0, S.c1].forEach((c, ci) => {
+        c.lamps.forEach((l, i) => { const v = lampLevel(ci, i, t); l.pl.intensity = 2.6 * v; l.m.color.setScalar(0.12 + 0.95 * Math.min(v, 1.3)); });
+        const sv = signLevel(ci, t); const inGap = t >= GAP[0] && t < GAP[1]; c.signMat.color.setScalar((inGap ? 0.015 : 0.1) + sv); c.signLight.intensity = 1.2 * sv;
+        // door
+        const open = ci === 0 && t >= DOOR_OPEN && t < CUT_ROOM ? 1.7 * (1 - Math.pow(1 - clamp((t - DOOR_OPEN) / 0.42, 0, 1), 3)) : 0;
+        c.hinge.rotation.y = open;
+        c.stamps.forEach((s) => {
+          const vis = t >= s.ts && t < CUT_ROOM;
+          s.p.visible = vis;
+          const k = t - s.ts;
+          s.m.emissiveIntensity = vis && k < 0.25 ? 0.9 * (1 - k / 0.25) : 0.05;
+          const sc = vis && k < 0.07 ? 1.12 : 1; s.p.scale.set(sc, sc, 1);
+        });
+      });
+      // ----- flashlight
+      const fl = flashLevel(t);
+      flash.intensity = 9 * fl;
+      camera.updateMatrixWorld();
+      tmpV.set(0.16, -0.18, 0.05).applyMatrix4(camera.matrixWorld); flash.position.copy(tmpV);
+      if (t < 2.25) {
+        // the beam reads the wall, word by word
+        const z = env([[0.05, -2.95], [0.2, -2.9], [1.12, -4.3], [1.3, -2.8], [1.42, -3.35], [2.16, -4.5], [2.25, -4.2]], t);
+        const y = env([[0.05, 1.62], [0.2, 1.78], [1.12, 1.78], [1.3, 1.38], [2.16, 1.38]], t);
+        flash.target.position.set(-1.2, y, z);
+      } else {
+        tmpV.set(0.05, -0.06, -3).applyMatrix4(camera.matrixWorld); flash.target.position.copy(tmpV);
+      }
+      flash.target.updateMatrixWorld();
+      // ----- circle
+      if (t >= 9.0 && t < CUT_ROOM) {
+        const n = circleState(t), fresh = charTimes.some((ct) => t - ct >= 0 && t - ct < 0.1);
+        const key = n + "|" + (fresh ? frameOf(t) : "") + "|" + (t >= 11.95 ? 1 : 0);
+        if (key !== S.circ.key) { drawCircle(S.circ.g, n, t); S.circ.t.needsUpdate = true; S.circ.key = key; }
+      }
+      // ----- room
+      const rm = S.room;
+      rm.grp.visible = inRoom;
+      rm.crtLight.intensity = inRoom ? 1.5 * flick(17, t, 0.05, 0.75) : 0;
+      rm.ckLight.intensity = inRoom ? 0.5 : 0;
+      rm.winLight.intensity = inRoom ? 2.2 : 0;
+      if (inRoom) { drawClock(rm.ck, t); drawTally(rm.tl, t); drawScreen(rm.scr, t); }
+      S.c0.grp.visible = S.c1.grp.visible = !inRoom;
+      ambient.intensity = inRoom ? 0.24 : t >= CUT_DREAM ? 0.16 : t >= GAP[0] && t < GAP[1] ? 0.015 : 0.1;
+      // ----- post
+      post.uniforms.uFade.value = fadeAt(t);
+      post.uniforms.uLid.value = lidAt(t);
+      post.uniforms.uFrame.value = f % 977;
+      post.uniforms.uTear.value = tearAt(t);
+      post.uniforms.uTearY.value = 0.15 + 0.7 * hash1(Math.floor(f / 2) * 1.7);
+      renderer.setRenderTarget(rt);
+      renderer.render(scene, camera);
+      renderer.setRenderTarget(null);
+      renderer.render(postScene, postCam);
+    }
+
+    window.addEventListener("hf-seek", (e) => renderAt(e.detail.time));
+    build();
+  </script>
+</template>

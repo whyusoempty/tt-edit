@@ -1,0 +1,86 @@
+<template>
+  <style>
+    @font-face {
+      font-family: "PS2P";
+      src: url("assets/fonts/PressStart2P.ttf");
+    }
+    #root {
+      position: absolute;
+      inset: 0;
+      font-family: "PS2P", monospace;
+      pointer-events: none;
+    }
+    /* in-game text window, aligned to the 5 px world pixel grid (PS2P 40 px = 5 px per font pixel) */
+    .box {
+      position: absolute;
+      left: 100px;
+      width: 1300px;
+      bottom: 115px;
+      padding: 35px 45px 40px;
+      background: rgba(5, 6, 7, 0.74);
+      border: 5px solid #858880;
+      box-shadow: 0 0 0 5px #0a0b0b, inset 0 0 0 5px #1c1f20;
+      font-size: 40px;
+      line-height: 60px;
+      color: #dad6c6;
+      text-shadow: 5px 5px 0 #000;
+      opacity: 0;
+      transform-origin: 50% 100%;
+    }
+    .box .ln {
+      display: block;
+      white-space: pre;
+    }
+    .box .ch {
+      opacity: 0;
+    }
+  </style>
+  <div id="root" data-composition-id="hud" data-width="1500" data-height="1500" data-duration="26.68">
+    <div id="b1" class="box" data-hide="2.18" data-layout-allow-overlap><span class="ln" data-words="я@0.20 потерялся@0.28 в@1.14 своей@1.16 голове@1.42"></span></div>
+    <div id="b2" class="box" data-hide="5.20" data-layout-allow-overlap><span class="ln" data-words="ну@2.22 кто@2.44 же@2.64 мне@2.82 поможет@2.98"></span><span class="ln" data-words="найти@3.72 выход@3.98 отсюда@4.50"></span></div>
+    <div id="b3" class="box" data-hide="6.85" data-layout-allow-overlap><span class="ln" data-words="столько@5.32 проблем@5.54"></span></div>
+    <div id="b4" class="box" data-hide="9.20" data-layout-allow-overlap><span class="ln" data-words="столько@7.04 проблем@7.30 сейчас@7.80"></span><span class="ln" data-words="в@8.16 моей@8.42 бошке@8.60"></span></div>
+    <div id="b5" class="box" data-hide="12.26" data-layout-allow-overlap><span class="ln" data-words="и@9.22 я@9.48 не@9.52 знаю@9.74"></span><span class="ln" data-words="как@10.26 мне@10.42 выйти@10.66 с@11.10 этого@11.18 круга@11.64"></span></div>
+    <div id="b6" class="box" data-hide="15.48" data-layout-allow-overlap><span class="ln" data-words="на@12.28 часах@12.46 пять@13.20 утра,@13.48"></span><span class="ln" data-words="я@14.08 снова@14.38 не@14.80 сплю@15.18"></span></div>
+    <div id="b7" class="box" data-hide="17.28" data-layout-allow-overlap><span class="ln" data-words="мониторю@15.60 твой@16.80 канал@17.04"></span></div>
+    <div id="b8" class="box" data-hide="19.10" data-layout-allow-overlap><span class="ln" data-words="звонка@17.30 от@18.04 тя@18.34 жду@18.68"></span></div>
+    <div id="b9" class="box" data-hide="22.72" data-layout-allow-overlap><span class="ln" data-words="глаза@19.14 слипаются@19.60"></span><span class="ln" data-words="я@20.46 скоро@20.60 попаду@20.96 в@21.74 царство@21.76 снов@22.30"></span></div>
+    <div id="b10" class="box" data-hide="24.38" data-layout-allow-overlap><span class="ln" data-words="но@22.74 проснусь@22.92 ли@23.56 завтра@23.74 я@24.16"></span></div>
+    <div id="b11" class="box" data-hide="26.30" data-layout-allow-overlap><span class="ln" data-words="вот@24.42 это@24.80 вопрос@25.38"></span></div>
+  </div>
+  <script>
+    (function () {
+      const tl = gsap.timeline({ paused: true });
+      const root = document.querySelector('[data-composition-id="hud"]');
+
+      // each word is typed at its sung time; letters spread over a short span, never into the next word
+      root.querySelectorAll(".box").forEach((box) => {
+        const words = [];
+        box.querySelectorAll(".ln").forEach((ln) => {
+          ln.textContent = "";
+          ln.dataset.words.split(" ").forEach((tok, i) => {
+            const at = tok.lastIndexOf("@");
+            const w = tok.slice(0, at), s = parseFloat(tok.slice(at + 1));
+            if (i) ln.appendChild(document.createTextNode(" "));
+            const spans = [...w].map((c) => {
+              const sp = document.createElement("span");
+              sp.className = "ch"; sp.textContent = c; ln.appendChild(sp); return sp;
+            });
+            words.push({ s, spans });
+          });
+        });
+        const t0 = words[0].s, hide = parseFloat(box.dataset.hide);
+        tl.fromTo(box, { opacity: 0, scaleY: 0.5 }, { opacity: 1, scaleY: 1, duration: 0.07, ease: "steps(2)" }, t0 - 0.02);
+        words.forEach((w, i) => {
+          const next = i < words.length - 1 ? words[i + 1].s : w.s + 0.5;
+          const span = Math.min(0.055 * w.spans.length, Math.max(0.03, next - w.s - 0.02));
+          w.spans.forEach((sp, k) => tl.set(sp, { opacity: 1 }, w.s + (span * k) / w.spans.length));
+        });
+        tl.to(box, { opacity: 0, duration: 0.06, ease: "steps(2)" }, hide - 0.06);
+      });
+
+      window.__timelines = window.__timelines || {};
+      window.__timelines["hud"] = tl;
+    })();
+  </script>
+</template>

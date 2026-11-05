@@ -1,0 +1,359 @@
+<template>
+  <style>
+    @font-face {
+      font-family: "PS2P";
+      src: url("assets/fonts/PressStart2P.ttf");
+    }
+    #root {
+      position: absolute;
+      inset: 0;
+      font-family: "PS2P", monospace;
+      color: #e6e0cf;
+      pointer-events: none;
+    }
+    .hud-layer {
+      position: absolute;
+      inset: 0;
+    }
+    /* top-left game clock */
+    #hud-clock {
+      position: absolute;
+      left: 96px;
+      top: 92px;
+      font-size: 32px;
+      color: #9fa892;
+      text-shadow: 4px 4px 0 #000;
+    }
+    #hud-clock span {
+      position: absolute;
+      left: 0;
+      top: 0;
+      opacity: 0;
+    }
+    /* RPG dialogue box */
+    .dlg {
+      position: absolute;
+      left: 110px;
+      right: 110px;
+      bottom: 128px;
+      padding: 44px 48px 48px;
+      background: linear-gradient(#161a24, #07080c);
+      border: 6px solid #d6cfbd;
+      box-shadow: 0 0 0 6px #000, inset 0 0 0 6px #2c313c;
+      font-size: 44px;
+      line-height: 1.55;
+      text-shadow: 4px 4px 0 #000;
+    }
+    .dlg .ln {
+      display: block;
+      white-space: pre;
+    }
+    .dlg .ch {
+      opacity: 0;
+    }
+    .dlg .more {
+      position: absolute;
+      right: 34px;
+      bottom: 28px;
+      width: 0;
+      height: 0;
+      border-left: 14px solid transparent;
+      border-right: 14px solid transparent;
+      border-top: 18px solid #d6cfbd;
+      opacity: 0;
+    }
+    /* system error windows */
+    .win {
+      position: absolute;
+      width: 1000px;
+      background: #b9b4a8;
+      border: 4px solid #000;
+      box-shadow: inset 4px 4px 0 #e8e4da, inset -4px -4px 0 #6d685e, 12px 12px 0 rgba(0, 0, 0, 0.55);
+      opacity: 0;
+    }
+    .win .bar {
+      height: 56px;
+      background: #5c1612;
+      color: #f2e9d8;
+      font-size: 26px;
+      padding: 15px 16px 0;
+      margin: 6px 6px 0;
+      position: relative;
+    }
+    .win .bar i {
+      position: absolute;
+      right: 10px;
+      top: 9px;
+      width: 36px;
+      height: 34px;
+      background: #b9b4a8;
+      color: #000;
+      font-style: normal;
+      font-size: 22px;
+      text-align: center;
+      line-height: 36px;
+      box-shadow: inset 3px 3px 0 #e8e4da, inset -3px -3px 0 #6d685e;
+    }
+    .win .body {
+      height: 150px;
+      display: flex;
+      align-items: center;
+      gap: 34px;
+      padding: 0 34px;
+      color: #111;
+      font-size: 40px;
+    }
+    .win .warn {
+      flex: none;
+      width: 0;
+      height: 0;
+      border-left: 38px solid transparent;
+      border-right: 38px solid transparent;
+      border-bottom: 66px solid #d9a600;
+      position: relative;
+    }
+    .win .warn b {
+      position: absolute;
+      left: -10px;
+      top: 22px;
+      font-size: 36px;
+      color: #000;
+    }
+    /* status message */
+    #status-msg {
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: 840px;
+      padding: 34px 0;
+      text-align: center;
+      font-size: 56px;
+      color: #d3cbb8;
+      text-shadow: 5px 5px 0 #000;
+      background: linear-gradient(to right, rgba(0, 0, 0, 0), rgba(0, 0, 0, 0.7) 20%, rgba(0, 0, 0, 0.7) 80%, rgba(0, 0, 0, 0));
+    }
+    #status-msg span {
+      opacity: 0;
+    }
+    /* new area title card */
+    #area-card {
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: 560px;
+      text-align: center;
+    }
+    #area-l1 {
+      font-size: 40px;
+      letter-spacing: 6px;
+      color: #a39a86;
+      text-shadow: 4px 4px 0 #000;
+    }
+    #area-l1 span,
+    #area-l2 span {
+      opacity: 0;
+    }
+    #area-l2 {
+      margin-top: 52px;
+      font-size: 76px;
+      letter-spacing: 4px;
+      color: #e2d8c2;
+      text-shadow: 6px 6px 0 #000, 0 0 24px rgba(160, 30, 20, 0.6);
+    }
+    .rule {
+      margin: 44px auto 0;
+      width: 900px;
+      height: 6px;
+      background: #8e2a1e;
+      transform-origin: 50% 50%;
+    }
+    .rule.top {
+      margin: 0 auto 44px;
+    }
+    /* final screen */
+    #final-bg {
+      position: absolute;
+      inset: 0;
+      background: #040404;
+    }
+    #final-q {
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: 470px;
+      text-align: center;
+      font-size: 84px;
+      color: #a3261a;
+      text-shadow: 6px 6px 0 #000;
+    }
+    #final-q span {
+      opacity: 0;
+    }
+    #final-cont {
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: 760px;
+      text-align: center;
+      font-size: 64px;
+      color: #ddd5c1;
+      opacity: 0;
+    }
+    #final-opts {
+      position: absolute;
+      left: 610px;
+      top: 900px;
+      font-size: 52px;
+      line-height: 1.9;
+      color: #ddd5c1;
+      white-space: pre;
+      opacity: 0;
+    }
+    /* CRT glass: scan lines on the 4 px pixel grid + vignette */
+    #crt-glass {
+      position: absolute;
+      inset: 0;
+      background: repeating-linear-gradient(to bottom, rgba(0, 0, 0, 0) 0, rgba(0, 0, 0, 0) 3px, rgba(0, 0, 0, 0.26) 3px, rgba(0, 0, 0, 0.26) 4px),
+        radial-gradient(ellipse at center, rgba(0, 0, 0, 0) 58%, rgba(0, 0, 0, 0.55) 100%);
+    }
+  </style>
+  <div id="root" data-composition-id="hud" data-width="1500" data-height="1500" data-duration="26.68">
+    <div id="hud-clock" class="clip" data-start="0" data-duration="12.1" data-track-index="0" data-layout-allow-overlap data-layout-allow-occlusion>
+      <span id="clk-57" data-layout-allow-occlusion>04:57</span><span id="clk-58" data-layout-allow-occlusion>04:58</span><span id="clk-59" data-layout-allow-occlusion>04:59</span>
+    </div>
+
+    <div id="dlg-help" class="clip" data-start="2.2" data-duration="3.1" data-track-index="1">
+      <div class="dlg">
+        <span class="ln" data-words="НУ@2.22 КТО@2.44 ЖЕ@2.64 МНЕ@2.82 ПОМОЖЕТ@2.98"></span>
+        <span class="ln" data-words="НАЙТИ@3.72 ВЫХОД@3.98 ОТСЮДА@4.50"></span>
+        <div class="more" id="dlg-help-more"></div>
+      </div>
+    </div>
+
+    <div id="err-stack" class="clip" data-start="7.78" data-duration="1.42" data-track-index="2" data-layout-allow-overlap data-layout-allow-overflow>
+      <div class="win" id="err-1" style="left: 190px; top: 330px">
+        <div class="bar">СТОЛЬКО ПРОБЛЕМ<i>X</i></div>
+        <div class="body"><div class="warn"><b>!</b></div><div>СЕЙЧАС</div></div>
+      </div>
+      <div class="win" id="err-2" style="left: 240px; top: 410px">
+        <div class="bar">СТОЛЬКО ПРОБЛЕМ<i>X</i></div>
+        <div class="body"><div class="warn"><b>!</b></div><div>СЕЙЧАС В МОЕЙ</div></div>
+      </div>
+      <div class="win" id="err-3" style="left: 290px; top: 490px">
+        <div class="bar">СТОЛЬКО ПРОБЛЕМ<i>X</i></div>
+        <div class="body"><div class="warn"><b>!</b></div><div>СЕЙЧАС В МОЕЙ БОШКЕ</div></div>
+      </div>
+      <div class="win" id="err-4" style="left: 340px; top: 570px">
+        <div class="bar">СТОЛЬКО ПРОБЛЕМ<i>X</i></div>
+        <div class="body"><div class="warn"><b>!</b></div><div>СЕЙЧАС В МОЕЙ БОШКЕ</div></div>
+      </div>
+      <div class="win" id="err-5" style="left: 390px; top: 650px">
+        <div class="bar">СТОЛЬКО ПРОБЛЕМ<i>X</i></div>
+        <div class="body"><div class="warn"><b>!</b></div><div>СЕЙЧАС В МОЕЙ БОШКЕ</div></div>
+      </div>
+    </div>
+
+    <div id="status-msg" class="clip" data-start="19.0" data-duration="1.6" data-track-index="3">
+      <span id="st-1">ГЛАЗА</span> <span id="st-2">СЛИПАЮТСЯ</span>
+    </div>
+
+    <div id="area-card" class="clip" data-start="20.4" data-duration="2.34" data-track-index="4">
+      <div class="rule top" id="area-rule-1"></div>
+      <div id="area-l1"><span id="ar-1">Я</span> <span id="ar-2">СКОРО</span> <span id="ar-3">ПОПАДУ</span></div>
+      <div id="area-l2"><span id="ar-4">В ЦАРСТВО</span> <span id="ar-5">СНОВ</span></div>
+      <div class="rule" id="area-rule-2"></div>
+    </div>
+
+    <div id="dlg-wake" class="clip" data-start="22.74" data-duration="1.64" data-track-index="1">
+      <div class="dlg">
+        <span class="ln" data-words="НО@22.74 ПРОСНУСЬ@22.92 ЛИ@23.56"></span>
+        <span class="ln" data-words="ЗАВТРА@23.74 Я@24.16"></span>
+      </div>
+    </div>
+
+    <div id="final" class="clip" data-start="24.38" data-duration="2.3" data-track-index="5">
+      <div id="final-bg"></div>
+      <div id="final-q"><span id="fq-1">ВОТ</span> <span id="fq-2">ЭТО</span> <span id="fq-3">ВОПРОС</span></div>
+      <div id="final-cont">RESTART?</div>
+      <div id="final-opts">&gt; YES
+  NO</div>
+    </div>
+
+    <div id="crt-glass" class="clip" data-start="0" data-duration="26.68" data-track-index="6" data-layout-ignore data-layout-allow-occlusion></div>
+  </div>
+  <script>
+    (function () {
+      const tl = gsap.timeline({ paused: true });
+      const root = document.querySelector('[data-composition-id="hud"]');
+
+      // typewriter: split each line into per-character spans, each word typed from its sung time
+      function typeLines(boxSel, endTime) {
+        const lines = root.querySelectorAll(boxSel + " .ln");
+        const words = [];
+        lines.forEach((ln) => {
+          ln.textContent = "";
+          ln.dataset.words.split(" ").forEach((tok, i) => {
+            const [w, s] = tok.split("@");
+            if (i) ln.appendChild(document.createTextNode(" "));
+            const spans = [...w].map((c) => { const sp = document.createElement("span"); sp.className = "ch"; sp.textContent = c; ln.appendChild(sp); return sp; });
+            words.push({ s: parseFloat(s), spans });
+          });
+        });
+        words.forEach((w, i) => {
+          const next = i < words.length - 1 ? words[i + 1].s : w.s + 0.4;
+          const span = Math.min(0.06 * w.spans.length, Math.max(0.03, next - w.s - 0.02));
+          w.spans.forEach((sp, k) => tl.set(sp, { opacity: 1 }, w.s + (span * k) / w.spans.length));
+        });
+        return words;
+      }
+
+      // HUD clock
+      tl.set("#clk-57", { opacity: 1 }, 0);
+      tl.set("#clk-57", { opacity: 0 }, 5.32);
+      tl.set("#clk-58", { opacity: 1 }, 5.32);
+      tl.set("#clk-58", { opacity: 0 }, 9.22);
+      tl.set("#clk-59", { opacity: 1 }, 9.22);
+
+      // L2 dialogue
+      tl.fromTo("#dlg-help .dlg", { opacity: 0, scaleY: 0.2 }, { opacity: 1, scaleY: 1, duration: 0.12, ease: "steps(3)" }, 2.2);
+      typeLines("#dlg-help");
+      tl.fromTo("#dlg-help-more", { opacity: 0 }, { opacity: 1, duration: 0.01, repeat: 2, yoyo: true, repeatDelay: 0.2 }, 4.75);
+      tl.to("#dlg-help .dlg", { opacity: 0, duration: 0.1, ease: "steps(2)" }, 5.18);
+
+      // L4 error windows: the body grows with the words, then copies pile up
+      [["#err-1", 7.8], ["#err-2", 8.16], ["#err-3", 8.6], ["#err-4", 8.92], ["#err-5", 9.1]].forEach(([id, t]) => {
+        tl.fromTo(id, { opacity: 1, x: -10 }, { opacity: 1, x: 0, duration: 0.07, ease: "steps(2)" }, t);
+      });
+
+      // L9 status message, flickering with the eyelids
+      tl.set("#st-1", { opacity: 1 }, 19.14);
+      tl.set("#st-2", { opacity: 1 }, 19.6);
+      tl.fromTo("#status-msg", { opacity: 1 }, { opacity: 0.45, duration: 0.28, ease: "sine.inOut", yoyo: true, repeat: 1 }, 19.5);
+      tl.to("#status-msg", { opacity: 0, duration: 0.2 }, 20.38);
+
+      // L9 area title
+      tl.set("#ar-1", { opacity: 1 }, 20.46);
+      tl.set("#ar-2", { opacity: 1 }, 20.6);
+      tl.set("#ar-3", { opacity: 1 }, 20.96);
+      tl.fromTo(["#area-rule-1", "#area-rule-2"], { scaleX: 0 }, { scaleX: 1, duration: 0.5, ease: "power3.out" }, 21.6);
+      tl.fromTo("#ar-4", { opacity: 0 }, { opacity: 1, duration: 0.25, ease: "steps(5)" }, 21.74);
+      tl.fromTo("#ar-5", { opacity: 0 }, { opacity: 1, duration: 0.25, ease: "steps(5)" }, 22.3);
+      tl.fromTo("#area-card", { opacity: 1 }, { opacity: 0, duration: 0.18, ease: "steps(3)" }, 22.56);
+
+      // L10 dialogue, eyes barely open
+      tl.fromTo("#dlg-wake .dlg", { opacity: 0, scaleY: 0.2 }, { opacity: 1, scaleY: 1, duration: 0.1, ease: "steps(3)" }, 22.74);
+      typeLines("#dlg-wake");
+
+      // L11 + RESTART?
+      tl.fromTo("#final-bg", { opacity: 1 }, { opacity: 1, duration: 0.01 }, 24.38);
+      [["#fq-1", 24.42], ["#fq-2", 24.8], ["#fq-3", 25.38]].forEach(([id, t]) => {
+        tl.fromTo(id, { opacity: 0 }, { opacity: 1, duration: 0.1, ease: "steps(2)" }, t);
+      });
+      tl.fromTo("#final-cont", { opacity: 0 }, { opacity: 1, duration: 0.01 }, 25.76);
+      tl.fromTo("#final-opts", { opacity: 0 }, { opacity: 1, duration: 0.01 }, 25.96);
+
+      window.__timelines = window.__timelines || {};
+      window.__timelines["hud"] = tl;
+    })();
+  </script>
+</template>

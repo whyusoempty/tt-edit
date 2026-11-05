@@ -1,0 +1,660 @@
+<template>
+  <style>
+    @font-face {
+      font-family: "NarrSerif";
+      src: url("assets/fonts/EBGaramond.ttf");
+      font-weight: 400 800;
+    }
+    @font-face {
+      font-family: "UISans";
+      src: url("assets/fonts/Inter.ttf");
+      font-weight: 100 900;
+    }
+    #root {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      font-family: "UISans", sans-serif;
+    }
+    /* ---------- crosshair ---------- */
+    #xh {
+      position: absolute;
+      left: 726px;
+      top: 726px;
+      width: 48px;
+      height: 48px;
+    }
+    #xh-inner,
+    #xh-idle,
+    #xh-use {
+      position: absolute;
+      inset: 0;
+    }
+    /* ---------- interaction prompts ---------- */
+    .prompt {
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: 862px;
+      text-align: center;
+      font-size: 44px;
+      font-weight: 700;
+      color: #ffffff;
+      letter-spacing: 0.2px;
+      text-shadow: 0 2px 8px rgba(0, 0, 0, 0.85), 0 0 2px rgba(0, 0, 0, 0.9);
+    }
+    .prompt span {
+      display: inline-block;
+    }
+    /* ---------- narrator subtitles ---------- */
+    .sub {
+      position: absolute;
+      left: 100px;
+      right: 100px;
+      bottom: 150px;
+      text-align: center;
+      font-family: "NarrSerif", serif;
+      font-weight: 600;
+      font-size: 60px;
+      line-height: 1.22;
+      color: #ecd78c;
+      text-shadow: 0 0 12px rgba(0, 0, 0, 0.9), 0 3px 3px rgba(0, 0, 0, 0.95);
+    }
+    .sub .w {
+      opacity: 0;
+    }
+    /* ---------- iOS-style notification ---------- */
+    #notif {
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: 0;
+      height: 320px;
+    }
+    #nb-wrap {
+      position: absolute;
+      left: 330px;
+      top: 70px;
+      width: 840px;
+      height: 176px;
+    }
+    #nb-stack {
+      position: absolute;
+      left: 26px;
+      right: 26px;
+      top: 26px;
+      height: 168px;
+      border-radius: 34px;
+      background: #c4c4ca;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+    }
+    .nb {
+      position: absolute;
+      inset: 0;
+      border-radius: 34px;
+      background: #ececf1;
+      box-shadow: 0 14px 40px rgba(0, 0, 0, 0.5);
+      display: flex;
+      gap: 26px;
+      padding: 26px 32px;
+      color: #111;
+    }
+    .nb-icon {
+      flex: none;
+      width: 76px;
+      height: 76px;
+      margin-top: 10px;
+    }
+    .nb-body {
+      flex: 1;
+      position: relative;
+    }
+    .nb-head {
+      display: flex;
+      justify-content: space-between;
+      font-size: 23px;
+      font-weight: 600;
+      letter-spacing: 1.2px;
+      color: #6c6c72;
+    }
+    .nb-title {
+      margin-top: 8px;
+      font-size: 32px;
+      font-weight: 700;
+    }
+    .nb-text {
+      position: relative;
+      height: 40px;
+      margin-top: 4px;
+      font-size: 30px;
+      font-weight: 400;
+      color: #2a2a2e;
+    }
+    .nb-text span {
+      position: absolute;
+      left: 0;
+      top: 0;
+      white-space: nowrap;
+      opacity: 0;
+    }
+    /* ---------- phone with Telegram ---------- */
+    #phone {
+      position: absolute;
+      left: 870px;
+      top: 196px;
+      width: 520px;
+      height: 1040px;
+    }
+    #ph {
+      position: absolute;
+      inset: 0;
+      border-radius: 76px;
+      background: linear-gradient(145deg, #2b2b2f, #0c0c0e 40%, #1c1c20);
+      box-shadow: 0 30px 80px rgba(0, 0, 0, 0.7), inset 0 0 0 3px #3a3a40;
+    }
+    .screen {
+      position: absolute;
+      left: 16px;
+      top: 16px;
+      width: 488px;
+      height: 1008px;
+      border-radius: 62px;
+      overflow: hidden;
+      background: #000;
+    }
+    .scr {
+      position: absolute;
+      inset: 0;
+      background: #000;
+      color: #fff;
+    }
+    .island {
+      position: absolute;
+      left: 184px;
+      top: 18px;
+      width: 120px;
+      height: 36px;
+      border-radius: 18px;
+      background: #000;
+    }
+    .status {
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: 0;
+      height: 66px;
+      font-size: 22px;
+      font-weight: 600;
+    }
+    .status .time {
+      position: absolute;
+      left: 52px;
+      top: 22px;
+    }
+    .status .icons {
+      position: absolute;
+      right: 38px;
+      top: 22px;
+      width: 110px;
+      height: 24px;
+    }
+    .nav {
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: 66px;
+      height: 82px;
+      background: #1c1c1d;
+      border-bottom: 1px solid #2c2c2e;
+    }
+    .nav .title {
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: 12px;
+      text-align: center;
+      font-size: 22px;
+      font-weight: 600;
+    }
+    .nav .subt {
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: 44px;
+      text-align: center;
+      font-size: 16px;
+      color: #8d8e93;
+    }
+    .back {
+      position: absolute;
+      left: 14px;
+      top: 22px;
+      height: 40px;
+      width: 110px;
+    }
+    .badge {
+      position: absolute;
+      left: 30px;
+      top: 4px;
+      min-width: 34px;
+      height: 30px;
+      padding: 0 9px;
+      border-radius: 15px;
+      background: #3e88f7;
+      font-size: 17px;
+      font-weight: 600;
+      line-height: 30px;
+      text-align: center;
+    }
+    .avatar {
+      position: absolute;
+      right: 18px;
+      top: 15px;
+      width: 52px;
+      height: 52px;
+      border-radius: 26px;
+      background: linear-gradient(160deg, #7f8fa8, #3c4558);
+      font-size: 24px;
+      font-weight: 600;
+      line-height: 52px;
+      text-align: center;
+    }
+    .chat {
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: 148px;
+      bottom: 86px;
+      overflow: hidden;
+      background: radial-gradient(circle at 20% 30%, #191d24 0, rgba(0, 0, 0, 0) 40%), radial-gradient(circle at 80% 70%, #171a20 0, rgba(0, 0, 0, 0) 45%), #0d0e11;
+    }
+    #feed {
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 14px;
+    }
+    .pill {
+      width: 112px;
+      margin: 0 auto 14px;
+      padding: 5px 0;
+      border-radius: 14px;
+      background: rgba(44, 44, 50, 0.85);
+      font-size: 16px;
+      font-weight: 500;
+      text-align: center;
+      color: #dcdcdc;
+    }
+    .post {
+      position: relative;
+      width: 440px;
+      margin: 0 0 12px 16px;
+      border-radius: 20px;
+      background: #262628;
+      overflow: hidden;
+    }
+    .photo {
+      position: relative;
+      width: 440px;
+    }
+    .meta {
+      position: absolute;
+      right: 12px;
+      bottom: 10px;
+      height: 28px;
+      padding: 0 10px;
+      border-radius: 14px;
+      background: rgba(0, 0, 0, 0.5);
+      font-size: 15px;
+      line-height: 28px;
+      color: #e8e8e8;
+      white-space: nowrap;
+    }
+    .meta svg,
+    .vmeta svg {
+      vertical-align: -3px;
+      margin-right: 4px;
+    }
+    .voice {
+      height: 100px;
+    }
+    .play {
+      position: absolute;
+      left: 16px;
+      top: 18px;
+      width: 60px;
+      height: 60px;
+      border-radius: 30px;
+      background: #3e88f7;
+    }
+    .wave {
+      position: absolute;
+      left: 92px;
+      top: 28px;
+      height: 32px;
+      width: 300px;
+      display: flex;
+      align-items: center;
+      gap: 3px;
+    }
+    .wave i {
+      display: block;
+      width: 4px;
+      border-radius: 2px;
+      background: #3e88f7;
+    }
+    .vdur {
+      position: absolute;
+      left: 92px;
+      top: 66px;
+      font-size: 15px;
+      color: #8d8e93;
+    }
+    .vmeta {
+      position: absolute;
+      right: 16px;
+      top: 66px;
+      font-size: 15px;
+      color: #8d8e93;
+    }
+    .bottom {
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      height: 86px;
+      background: #1c1c1d;
+      border-top: 1px solid #2c2c2e;
+      text-align: center;
+      font-size: 21px;
+      font-weight: 500;
+      color: #3e88f7;
+      line-height: 66px;
+    }
+    .homebar {
+      position: absolute;
+      left: 177px;
+      bottom: 10px;
+      width: 134px;
+      height: 5px;
+      border-radius: 3px;
+      background: rgba(255, 255, 255, 0.55);
+    }
+    .seg {
+      position: absolute;
+      left: 104px;
+      top: 22px;
+      width: 280px;
+      height: 38px;
+      border-radius: 10px;
+      background: #2c2c2e;
+      font-size: 17px;
+      font-weight: 600;
+    }
+    .seg span {
+      position: absolute;
+      top: 3px;
+      height: 32px;
+      line-height: 32px;
+      text-align: center;
+      border-radius: 8px;
+    }
+    .edit {
+      position: absolute;
+      left: 22px;
+      top: 28px;
+      font-size: 21px;
+      color: #3e88f7;
+    }
+    .empty {
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: 360px;
+      text-align: center;
+      font-size: 22px;
+      color: #8d8e93;
+    }
+    .tabs {
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      height: 104px;
+      background: #1c1c1d;
+      border-top: 1px solid #2c2c2e;
+    }
+    .tab {
+      position: absolute;
+      top: 10px;
+      width: 122px;
+      text-align: center;
+      font-size: 13px;
+      font-weight: 500;
+      color: #8d8e93;
+    }
+    .tab svg {
+      display: block;
+      margin: 0 auto 4px;
+    }
+    .tab.on {
+      color: #3e88f7;
+    }
+    .tbadge {
+      position: absolute;
+      left: 66px;
+      top: -4px;
+      min-width: 26px;
+      height: 24px;
+      padding: 0 6px;
+      border-radius: 12px;
+      background: #ff3b30;
+      color: #fff;
+      font-size: 14px;
+      font-weight: 600;
+      line-height: 24px;
+    }
+    #ph-dim {
+      position: absolute;
+      inset: 0;
+      background: #000;
+      opacity: 0;
+    }
+  </style>
+
+  <div data-hf-id="hf-uy1d" id="root" data-composition-id="hud" data-width="1500" data-height="1500" data-duration="26.68">
+    <!-- crosshair: plain ring, ring + dot over something usable -->
+    <div data-hf-id="hf-wsjy" id="xh" class="clip" data-start="0.5" data-duration="19.25" data-track-index="0" data-layout-allow-overlap>
+      <div data-hf-id="hf-jfjq" id="xh-inner" data-layout-allow-overlap>
+        <svg data-hf-id="hf-wckv" id="xh-idle" width="48" height="48" viewBox="0 0 48 48" data-layout-allow-overlap>
+          <circle data-hf-id="hf-ohgb" cx="24" cy="24" r="8" fill="none" stroke="rgba(255,255,255,0.78)" stroke-width="2.4" />
+        </svg>
+        <svg data-hf-id="hf-kavk" id="xh-use" width="48" height="48" viewBox="0 0 48 48" data-layout-allow-overlap>
+          <circle data-hf-id="hf-ezbv" cx="24" cy="24" r="13" fill="none" stroke="rgba(255,255,255,0.85)" stroke-width="2.4" stroke-dasharray="5.1 3.06" />
+          <circle data-hf-id="hf-5bis" cx="24" cy="24" r="3.6" fill="rgba(255,255,255,0.95)" />
+        </svg>
+      </div>
+    </div>
+
+    <!-- interaction prompts -->
+    <div data-hf-id="hf-txoj" id="p-getup" class="prompt clip" data-start="1.55" data-duration="0.7" data-track-index="1"><span data-hf-id="hf-72e5">[SPACE] to Get Up</span></div>
+    <div data-hf-id="hf-7zyv" id="p-open" class="prompt clip" data-start="4.45" data-duration="0.6" data-track-index="1"><span data-hf-id="hf-3dsc">[E] Open Door</span></div>
+    <div data-hf-id="hf-aljw" id="p-locked" class="prompt clip" data-start="5.06" data-duration="0.92" data-track-index="1"><span data-hf-id="hf-yc7j">Locked</span></div>
+    <div data-hf-id="hf-gv0v" id="p-close" class="prompt clip" data-start="9.34" data-duration="0.32" data-track-index="1"><span data-hf-id="hf-istc">[E] Close Door</span></div>
+    <div data-hf-id="hf-u0wn" id="p-phone" class="prompt clip" data-start="14.04" data-duration="0.44" data-track-index="1"><span data-hf-id="hf-v8j2">[E] Pick up Phone</span></div>
+    <div data-hf-id="hf-5l3i" id="p-lamp" class="prompt clip" data-start="19.36" data-duration="0.38" data-track-index="1"><span data-hf-id="hf-1gs4">[E] Turn Off Lamp</span></div>
+
+    <!-- Telegram notifications piling up on "столько проблем" -->
+    <div data-hf-id="hf-z3n4" id="notif" class="clip" data-start="5.3" data-duration="1.38" data-track-index="2">
+      <div data-hf-id="hf-i0fu" id="nb-wrap">
+        <div data-hf-id="hf-3gu6" id="nb-stack"></div>
+        <div data-hf-id="hf-xjjk" class="nb">
+          <svg data-hf-id="hf-qdxq" class="nb-icon" viewBox="0 0 76 76">
+            <rect data-hf-id="hf-iie4" width="76" height="76" rx="18" fill="#2aa3e0" />
+            <path data-hf-id="hf-p9bl" d="M15 37.5 L58 20 L50.5 57 L37.2 47.3 L31 53.5 L31.6 44.4 L52 26.6 L27 41.5 Z" fill="#fff" />
+          </svg>
+          <div data-hf-id="hf-n5mt" class="nb-body">
+            <div data-hf-id="hf-9fu7" class="nb-head"><span data-hf-id="hf-uwz6">TELEGRAM</span><span data-hf-id="hf-f984">сейчас</span></div>
+            <div data-hf-id="hf-9tua" class="nb-title">Новые сообщения</div>
+            <div data-hf-id="hf-1ah2" class="nb-text" data-layout-allow-overlap>
+              <span data-hf-id="hf-bfsn" id="nb-c1" data-layout-allow-overlap>3 новых сообщения</span>
+              <span data-hf-id="hf-zvmm" id="nb-c2" data-layout-allow-overlap>12 новых сообщений</span>
+              <span data-hf-id="hf-su75" id="nb-c3" data-layout-allow-overlap>47 новых сообщений</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- the phone: Telegram channel, then the empty calls tab -->
+    <div data-hf-id="hf-24ke" id="phone" class="clip" data-start="15.2" data-duration="4.3" data-track-index="3">
+      <div data-hf-id="hf-je8t" id="ph">
+        <div data-hf-id="hf-59m2" class="screen" data-layout-allow-overlap>
+          <div data-hf-id="hf-itu2" id="scr-calls" class="scr">
+            <div data-hf-id="hf-5d4k" class="nav" style="top: 66px; height: 82px">
+              <span data-hf-id="hf-8yea" class="edit">Изм.</span>
+              <div data-hf-id="hf-ta0z" class="seg"><span data-hf-id="hf-lnc4" style="left: 3px; width: 108px; background: #636366">Все</span><span data-hf-id="hf-m9km" style="left: 114px; width: 163px; color: #d0d0d4">Пропущенные</span></div>
+              <svg data-hf-id="hf-c497" style="position: absolute; right: 22px; top: 26px" width="34" height="34" viewBox="0 0 34 34"><path data-hf-id="hf-mdug" d="M9 5 C7 5 5 7 5.5 10 C7 19 15 27 24 28.5 C27 29 29 27 29 25 L29 21.5 L23.5 19 L20.5 22 C16.5 20.5 13.5 17.5 12 13.5 L15 10.5 L12.5 5 Z" fill="none" stroke="#3e88f7" stroke-width="2.4" stroke-linejoin="round" /><path data-hf-id="hf-jjzr" d="M25 4 V14 M20 9 H30" stroke="#3e88f7" stroke-width="2.4" stroke-linecap="round" /></svg>
+            </div>
+            <div data-hf-id="hf-h6vx" class="empty">
+              <svg data-hf-id="hf-67tb" width="120" height="120" viewBox="0 0 34 34" style="display: block; margin: 0 auto 28px"><path data-hf-id="hf-qlmu" d="M9 5 C7 5 5 7 5.5 10 C7 19 15 27 24 28.5 C27 29 29 27 29 25 L29 21.5 L23.5 19 L20.5 22 C16.5 20.5 13.5 17.5 12 13.5 L15 10.5 L12.5 5 Z" fill="#3a3a3c" /></svg>
+              Нет недавних звонков
+            </div>
+            <div data-hf-id="hf-5rmk" class="tabs">
+              <div data-hf-id="hf-oit8" class="tab" style="left: 0"><svg data-hf-id="hf-2b42" width="34" height="34" viewBox="0 0 34 34"><circle data-hf-id="hf-22l6" cx="17" cy="12" r="6.5" fill="#8d8e93" /><path data-hf-id="hf-wbxk" d="M5 29 C6 21 11 19 17 19 C23 19 28 21 29 29 Z" fill="#8d8e93" /></svg>Контакты</div>
+              <div data-hf-id="hf-yda8" class="tab on" style="left: 122px"><svg data-hf-id="hf-fq5i" width="34" height="34" viewBox="0 0 34 34"><path data-hf-id="hf-owbh" d="M9 5 C7 5 5 7 5.5 10 C7 19 15 27 24 28.5 C27 29 29 27 29 25 L29 21.5 L23.5 19 L20.5 22 C16.5 20.5 13.5 17.5 12 13.5 L15 10.5 L12.5 5 Z" fill="#3e88f7" /></svg>Звонки</div>
+              <div data-hf-id="hf-vzcs" class="tab" style="left: 244px"><svg data-hf-id="hf-g4gj" width="34" height="34" viewBox="0 0 34 34"><path data-hf-id="hf-s04c" d="M17 5 C9.5 5 4 9.8 4 16 C4 19.5 5.8 22.5 8.8 24.6 L7.5 30 L13.4 26.6 C14.5 26.9 15.7 27 17 27 C24.5 27 30 22.2 30 16 C30 9.8 24.5 5 17 5 Z" fill="#8d8e93" /></svg>Чаты<span data-hf-id="hf-k3hh" class="tbadge">47</span></div>
+              <div data-hf-id="hf-8s8a" class="tab" style="left: 366px"><svg data-hf-id="hf-girk" width="34" height="34" viewBox="0 0 34 34"><circle data-hf-id="hf-0rnm" cx="17" cy="17" r="11" fill="none" stroke="#8d8e93" stroke-width="3.2" stroke-dasharray="4 2.9" /><circle data-hf-id="hf-s4rv" cx="17" cy="17" r="4.5" fill="#8d8e93" /></svg>Настройки</div>
+            </div>
+          </div>
+
+          <div data-hf-id="hf-bynn" id="scr-chan" class="scr">
+            <div data-hf-id="hf-vshe" class="chat">
+              <div data-hf-id="hf-jca1" id="feed">
+                <div data-hf-id="hf-a1nm" class="pill">Сегодня</div>
+                <div data-hf-id="hf-j2jy" class="post">
+                  <div data-hf-id="hf-zi1v" class="photo" style="height: 300px; background: radial-gradient(circle at 72% 30%, rgba(255, 178, 92, 0.6) 0, rgba(255, 178, 92, 0.12) 14%, rgba(0, 0, 0, 0) 30%), linear-gradient(#0b1020 0, #1b1b26 62%, #07070a 62%, #0d0d10 100%)"></div>
+                  <div data-hf-id="hf-6jv9" class="meta"><svg data-hf-id="hf-bo4a" width="18" height="12" viewBox="0 0 18 12"><path data-hf-id="hf-sfgj" d="M1 6 C4 1 14 1 17 6 C14 11 4 11 1 6 Z" fill="none" stroke="#e8e8e8" stroke-width="1.6" /><circle data-hf-id="hf-t5u3" cx="9" cy="6" r="2.4" fill="#e8e8e8" /></svg>41&nbsp;&nbsp;02:47</div>
+                </div>
+                <div data-hf-id="hf-4izs" class="post voice">
+                  <div data-hf-id="hf-24ou" class="play"><svg data-hf-id="hf-162i" width="60" height="60" viewBox="0 0 60 60"><path data-hf-id="hf-vr2i" d="M24 18 L42 30 L24 42 Z" fill="#fff" /></svg></div>
+                  <div data-hf-id="hf-cfyz" class="wave"><i data-hf-id="hf-9ov2" style="height: 8px"></i><i data-hf-id="hf-iigx" style="height: 14px"></i><i data-hf-id="hf-a5hi" style="height: 22px"></i><i data-hf-id="hf-bbw7" style="height: 12px"></i><i data-hf-id="hf-u4x0" style="height: 28px"></i><i data-hf-id="hf-wn99" style="height: 18px"></i><i data-hf-id="hf-toqf" style="height: 9px"></i><i data-hf-id="hf-a3zs" style="height: 24px"></i><i data-hf-id="hf-6h73" style="height: 30px"></i><i data-hf-id="hf-igz7" style="height: 16px"></i><i data-hf-id="hf-ylxw" style="height: 11px"></i><i data-hf-id="hf-ddfg" style="height: 20px"></i><i data-hf-id="hf-f97m" style="height: 26px"></i><i data-hf-id="hf-mj9x" style="height: 14px"></i><i data-hf-id="hf-90ci" style="height: 8px"></i><i data-hf-id="hf-afgx" style="height: 18px"></i><i data-hf-id="hf-s4qn" style="height: 23px"></i><i data-hf-id="hf-m8l3" style="height: 12px"></i><i data-hf-id="hf-wlvd" style="height: 7px"></i><i data-hf-id="hf-5bkj" style="height: 16px"></i><i data-hf-id="hf-s68d" style="height: 21px"></i><i data-hf-id="hf-deqt" style="height: 10px"></i><i data-hf-id="hf-k0o8" style="height: 6px"></i><i data-hf-id="hf-vdzy" style="height: 13px"></i><i data-hf-id="hf-hugc" style="height: 19px"></i><i data-hf-id="hf-xldj" style="height: 9px"></i><i data-hf-id="hf-9ba8" style="height: 6px"></i><i data-hf-id="hf-vz58" style="height: 11px"></i><i data-hf-id="hf-3po0" style="height: 15px"></i><i data-hf-id="hf-9enj" style="height: 8px"></i><i data-hf-id="hf-k2bv" style="height: 5px"></i><i data-hf-id="hf-x72i" style="height: 9px"></i><i data-hf-id="hf-lua2" style="height: 12px"></i><i data-hf-id="hf-84d5" style="height: 6px"></i><i data-hf-id="hf-232q" style="height: 4px"></i></div>
+                  <div data-hf-id="hf-ls3n" class="vdur">0:42</div>
+                  <div data-hf-id="hf-bgh7" class="vmeta"><svg data-hf-id="hf-boce" width="18" height="12" viewBox="0 0 18 12"><path data-hf-id="hf-27wl" d="M1 6 C4 1 14 1 17 6 C14 11 4 11 1 6 Z" fill="none" stroke="#8d8e93" stroke-width="1.6" /><circle data-hf-id="hf-d8hx" cx="9" cy="6" r="2.4" fill="#8d8e93" /></svg>38&nbsp;&nbsp;03:31</div>
+                </div>
+                <div data-hf-id="hf-8zw2" class="post">
+                  <div data-hf-id="hf-t9ux" class="photo" style="height: 250px; background: radial-gradient(circle at 18% 64%, rgba(255, 150, 70, 0.55) 0, rgba(255, 150, 70, 0) 9%), radial-gradient(circle at 46% 58%, rgba(255, 210, 140, 0.45) 0, rgba(255, 210, 140, 0) 7%), radial-gradient(circle at 70% 70%, rgba(140, 170, 255, 0.4) 0, rgba(140, 170, 255, 0) 10%), radial-gradient(circle at 86% 52%, rgba(255, 120, 60, 0.4) 0, rgba(255, 120, 60, 0) 6%), linear-gradient(#090b12, #18141c)"></div>
+                  <div data-hf-id="hf-i5uz" class="meta"><svg data-hf-id="hf-c2nf" width="18" height="12" viewBox="0 0 18 12"><path data-hf-id="hf-v5c3" d="M1 6 C4 1 14 1 17 6 C14 11 4 11 1 6 Z" fill="none" stroke="#e8e8e8" stroke-width="1.6" /><circle data-hf-id="hf-do2z" cx="9" cy="6" r="2.4" fill="#e8e8e8" /></svg>36&nbsp;&nbsp;04:12</div>
+                </div>
+                <div data-hf-id="hf-9e73" class="post">
+                  <div data-hf-id="hf-lr0v" class="photo" style="height: 320px; background: radial-gradient(circle at 64% 24%, rgba(220, 225, 240, 0.85) 0, rgba(220, 225, 240, 0.85) 4%, rgba(160, 175, 215, 0.25) 6%, rgba(0, 0, 0, 0) 22%), linear-gradient(#0a0e1a 0, #161b2a 58%, #050608 58%, #050608 100%)"></div>
+                  <div data-hf-id="hf-crge" class="meta"><svg data-hf-id="hf-cgyg" width="18" height="12" viewBox="0 0 18 12"><path data-hf-id="hf-ur12" d="M1 6 C4 1 14 1 17 6 C14 11 4 11 1 6 Z" fill="none" stroke="#e8e8e8" stroke-width="1.6" /><circle data-hf-id="hf-d9ry" cx="9" cy="6" r="2.4" fill="#e8e8e8" /></svg>29&nbsp;&nbsp;04:51</div>
+                </div>
+              </div>
+            </div>
+            <div data-hf-id="hf-e5hr" class="nav">
+              <div data-hf-id="hf-q64h" class="back">
+                <svg data-hf-id="hf-0mju" width="22" height="40" viewBox="0 0 22 40"><path data-hf-id="hf-2rvi" d="M17 6 L5 20 L17 34" fill="none" stroke="#3e88f7" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" /></svg>
+                <span data-hf-id="hf-xxm7" class="badge">47</span>
+              </div>
+              <div data-hf-id="hf-ewp3" class="title">твой канал</div>
+              <div data-hf-id="hf-ldou" class="subt">24 подписчика</div>
+              <div data-hf-id="hf-2t2j" class="avatar">Т</div>
+            </div>
+            <div data-hf-id="hf-nd7b" class="bottom">Отключить звук</div>
+          </div>
+
+          <div data-hf-id="hf-8kim" class="status">
+            <span data-hf-id="hf-daml" class="time">5:00</span>
+            <svg data-hf-id="hf-79gc" class="icons" viewBox="0 0 110 24">
+              <rect data-hf-id="hf-f6ri" x="0" y="15" width="5" height="7" rx="1.5" fill="#fff" />
+              <rect data-hf-id="hf-mknt" x="8" y="11" width="5" height="11" rx="1.5" fill="#fff" />
+              <rect data-hf-id="hf-k2bt" x="16" y="7" width="5" height="15" rx="1.5" fill="#fff" />
+              <rect data-hf-id="hf-zpks" x="24" y="3" width="5" height="19" rx="1.5" fill="#5a5a5e" />
+              <path data-hf-id="hf-r275" d="M40 9 C46 3 56 3 62 9 M44 13 C48 9 54 9 58 13 M48.5 17.5 C50 16 52 16 53.5 17.5" fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round" />
+              <rect data-hf-id="hf-l3no" x="70" y="4" width="34" height="16" rx="5" fill="none" stroke="rgba(255,255,255,0.5)" stroke-width="2" />
+              <rect data-hf-id="hf-q9u3" x="73" y="7" width="6" height="10" rx="2" fill="#ff453a" />
+              <rect data-hf-id="hf-vb8m" x="106" y="9" width="3" height="6" rx="1.5" fill="rgba(255,255,255,0.5)" />
+            </svg>
+          </div>
+          <div data-hf-id="hf-7sfr" class="island"></div>
+          <div data-hf-id="hf-i260" class="homebar"></div>
+          <div data-hf-id="hf-553k" id="ph-dim"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- narrator subtitles: the lyric, word by word -->
+    <div data-hf-id="hf-8kre" id="s1" class="sub clip" data-start="0.2" data-duration="2.0" data-track-index="4"><span data-hf-id="hf-ydjz" class="w" data-t="0.20">Я</span> <span data-hf-id="hf-z85o" class="w" data-t="0.28">потерялся</span> <span data-hf-id="hf-1g3m" class="w" data-t="1.14">в</span> <span data-hf-id="hf-v8qf" class="w" data-t="1.16">своей</span> <span data-hf-id="hf-s0ng" class="w" data-t="1.42">голове</span></div>
+    <div data-hf-id="hf-9hx6" id="s2" class="sub clip" data-start="2.22" data-duration="3.0" data-track-index="4"><span data-hf-id="hf-md0u" class="w" data-t="2.22">Ну</span> <span data-hf-id="hf-weyg" class="w" data-t="2.44">кто</span> <span data-hf-id="hf-3jtd" class="w" data-t="2.64">же</span> <span data-hf-id="hf-1po2" class="w" data-t="2.82">мне</span> <span data-hf-id="hf-woof" class="w" data-t="2.98">поможет</span> <span data-hf-id="hf-kbus" class="w" data-t="3.72">найти</span> <span data-hf-id="hf-cx2i" class="w" data-t="3.98">выход</span> <span data-hf-id="hf-qq81" class="w" data-t="4.50">отсюда?</span></div>
+    <div data-hf-id="hf-62my" id="s3" class="sub clip" data-start="5.32" data-duration="1.3" data-track-index="4"><span data-hf-id="hf-qvuo" class="w" data-t="5.32">Столько</span> <span data-hf-id="hf-fd76" class="w" data-t="5.54">проблем</span></div>
+    <div data-hf-id="hf-2wau" id="s4" class="sub clip" data-start="7.04" data-duration="2.17" data-track-index="4"><span data-hf-id="hf-h9h7" class="w" data-t="7.04">Столько</span> <span data-hf-id="hf-myey" class="w" data-t="7.30">проблем</span> <span data-hf-id="hf-5pyg" class="w" data-t="7.80">сейчас</span> <span data-hf-id="hf-yspl" class="w" data-t="8.16">в</span> <span data-hf-id="hf-mbdq" class="w" data-t="8.42">моей</span> <span data-hf-id="hf-621e" class="w" data-t="8.60">бошке</span></div>
+    <div data-hf-id="hf-fl83" id="s5" class="sub clip" data-start="9.22" data-duration="3.05" data-track-index="4"><span data-hf-id="hf-24d5" class="w" data-t="9.22">И</span> <span data-hf-id="hf-v0oo" class="w" data-t="9.48">я</span> <span data-hf-id="hf-glck" class="w" data-t="9.52">не</span> <span data-hf-id="hf-ykxk" class="w" data-t="9.74">знаю</span> <span data-hf-id="hf-5lcn" class="w" data-t="10.26">как</span> <span data-hf-id="hf-nz1f" class="w" data-t="10.42">мне</span> <span data-hf-id="hf-znuf" class="w" data-t="10.66">выйти</span> <span data-hf-id="hf-ge8k" class="w" data-t="11.10">с</span> <span data-hf-id="hf-2gt1" class="w" data-t="11.18">этого</span> <span data-hf-id="hf-1aes" class="w" data-t="11.64">круга</span></div>
+    <div data-hf-id="hf-zl3r" id="s6" class="sub clip" data-start="12.28" data-duration="3.2" data-track-index="4"><span data-hf-id="hf-pvq4" class="w" data-t="12.28">На</span> <span data-hf-id="hf-mggm" class="w" data-t="12.46">часах</span> <span data-hf-id="hf-z8ly" class="w" data-t="13.20">пять</span> <span data-hf-id="hf-q2dz" class="w" data-t="13.48">утра,</span> <span data-hf-id="hf-a9fa" class="w" data-t="14.08">я</span> <span data-hf-id="hf-zp36" class="w" data-t="14.38">снова</span> <span data-hf-id="hf-zlcf" class="w" data-t="14.80">не</span> <span data-hf-id="hf-2rt0" class="w" data-t="15.18">сплю</span></div>
+    <div data-hf-id="hf-egby" id="s7" class="sub clip" data-start="15.5" data-duration="1.8" data-track-index="4"><span data-hf-id="hf-fd8t" class="w" data-t="15.60">Мониторю</span> <span data-hf-id="hf-sz3a" class="w" data-t="16.80">твой</span> <span data-hf-id="hf-f8c8" class="w" data-t="17.04">канал</span></div>
+    <div data-hf-id="hf-lkgt" id="s8" class="sub clip" data-start="17.3" data-duration="1.8" data-track-index="4"><span data-hf-id="hf-xglb" class="w" data-t="17.30">Звонка</span> <span data-hf-id="hf-mjdl" class="w" data-t="18.04">от</span> <span data-hf-id="hf-3ntj" class="w" data-t="18.34">тя</span> <span data-hf-id="hf-kw3u" class="w" data-t="18.68">жду</span></div>
+    <div data-hf-id="hf-hitn" id="s9" class="sub clip" data-start="19.14" data-duration="1.3" data-track-index="4"><span data-hf-id="hf-esjm" class="w" data-t="19.14">Глаза</span> <span data-hf-id="hf-92e3" class="w" data-t="19.60">слипаются</span></div>
+    <div data-hf-id="hf-qul8" id="s10" class="sub clip" data-start="20.46" data-duration="2.26" data-track-index="4"><span data-hf-id="hf-lpql" class="w" data-t="20.46">Я</span> <span data-hf-id="hf-3gb5" class="w" data-t="20.60">скоро</span> <span data-hf-id="hf-rchw" class="w" data-t="20.96">попаду</span> <span data-hf-id="hf-y17i" class="w" data-t="21.74">в</span> <span data-hf-id="hf-sgl7" class="w" data-t="21.76">царство</span> <span data-hf-id="hf-9or3" class="w" data-t="22.30">снов</span></div>
+    <div data-hf-id="hf-cik7" id="s11" class="sub clip" data-start="22.74" data-duration="1.66" data-track-index="4"><span data-hf-id="hf-1gre" class="w" data-t="22.74">Но</span> <span data-hf-id="hf-u2pm" class="w" data-t="22.92">проснусь</span> <span data-hf-id="hf-acwp" class="w" data-t="23.56">ли</span> <span data-hf-id="hf-gupd" class="w" data-t="23.74">завтра</span> <span data-hf-id="hf-xc6d" class="w" data-t="24.16">я?</span></div>
+    <div data-hf-id="hf-ikpi" id="s12" class="sub clip" data-start="24.42" data-duration="2.26" data-track-index="4"><span data-hf-id="hf-9bja" class="w" data-t="24.42">Вот</span> <span data-hf-id="hf-pwsd" class="w" data-t="24.80">это</span> <span data-hf-id="hf-y56a" class="w" data-t="25.38">вопрос</span></div>
+  </div>
+
+  <script>
+    (function () {
+      const tl = gsap.timeline({ paused: true });
+      const root = document.querySelector('[data-composition-id="hud"]');
+
+      // subtitles: each word fades in on its sung onset; lines before a pause fade out
+      root.querySelectorAll(".sub").forEach((line) => {
+        line.querySelectorAll(".w").forEach((w) => {
+          tl.fromTo(w, { opacity: 0 }, { opacity: 1, duration: 0.14, ease: "power1.out" }, parseFloat(w.dataset.t));
+        });
+      });
+      tl.to("#s3", { opacity: 0, duration: 0.16 }, 6.44);
+      tl.to("#s8", { opacity: 0, duration: 0.14 }, 18.94);
+      tl.to("#s12", { opacity: 0, duration: 0.4 }, 26.2);
+
+      // prompts: quick fade in and out inside their windows
+      [["#p-getup", 1.55, 2.25], ["#p-open", 4.45, 5.05], ["#p-locked", 5.06, 5.98], ["#p-close", 9.34, 9.66], ["#p-phone", 14.04, 14.48], ["#p-lamp", 19.36, 19.74]].forEach(([id, a, b]) => {
+        tl.fromTo(id + " span", { opacity: 0 }, { opacity: 1, duration: 0.1, ease: "none" }, a);
+        tl.to(id + " span", { opacity: 0, duration: 0.08, ease: "none" }, b - 0.09);
+      });
+      // the E press on the locked door
+      tl.fromTo("#p-open span", { scale: 1 }, { scale: 0.92, duration: 0.05, yoyo: true, repeat: 1, ease: "none" }, 4.94);
+
+      // crosshair: ring, or ring + dot while aiming at something usable
+      tl.set("#xh-inner", { opacity: 1 }, 0.5);
+      tl.set("#xh-idle", { opacity: 1 }, 0.5);
+      tl.set("#xh-use", { opacity: 0 }, 0.5);
+      [[4.4, 5.95], [9.3, 9.66], [14.0, 14.48], [19.34, 19.74]].forEach(([a, b]) => {
+        tl.set("#xh-idle", { opacity: 0 }, a); tl.set("#xh-use", { opacity: 1 }, a);
+        tl.set("#xh-idle", { opacity: 1 }, b); tl.set("#xh-use", { opacity: 0 }, b);
+      });
+      tl.set("#xh-inner", { opacity: 0 }, 15.15);
+      tl.set("#xh-inner", { opacity: 1 }, 19.3);
+
+      // notifications
+      tl.fromTo("#nb-wrap", { y: -280 }, { y: 0, duration: 0.3, ease: "power3.out" }, 5.3);
+      tl.set("#nb-c1", { opacity: 1 }, 5.3);
+      tl.fromTo("#nb-stack", { opacity: 0, y: -14 }, { opacity: 1, y: 0, duration: 0.18, ease: "power2.out" }, 5.71);
+      tl.set("#nb-c1", { opacity: 0 }, 5.71); tl.set("#nb-c2", { opacity: 1 }, 5.71);
+      tl.set("#nb-c2", { opacity: 0 }, 6.13); tl.set("#nb-c3", { opacity: 1 }, 6.13);
+      tl.fromTo("#nb-wrap", { scale: 1.035 }, { scale: 1, duration: 0.2, ease: "power2.out" }, 5.71);
+      tl.fromTo("#nb-wrap", { scale: 1.035 }, { scale: 1, duration: 0.2, ease: "power2.out", immediateRender: false }, 6.13);
+      tl.to("#nb-wrap", { y: -280, duration: 0.24, ease: "power2.in" }, 6.42);
+
+      // phone: up, scroll the channel, back out to the empty calls tab, dim, down
+      tl.fromTo("#ph", { y: 1180 }, { y: 0, duration: 0.4, ease: "power3.out" }, 15.2);
+      tl.to("#ph", { y: -7, duration: 0.9, ease: "sine.inOut", yoyo: true, repeat: 2 }, 15.62);
+      tl.fromTo("#feed", { y: 0 }, { y: 560, duration: 0.78, ease: "power2.inOut" }, 15.6);
+      tl.to("#feed", { y: 0, duration: 0.42, ease: "power3.out" }, 16.42);
+      tl.fromTo("#scr-calls", { x: -150, opacity: 0.4 }, { x: 0, opacity: 1, duration: 0.3, ease: "power2.inOut" }, 17.3);
+      tl.fromTo("#scr-chan", { x: 0 }, { x: 490, duration: 0.3, ease: "power2.inOut" }, 17.3);
+      tl.fromTo("#ph-dim", { opacity: 0 }, { opacity: 0.62, duration: 0.25, ease: "none" }, 18.86);
+      tl.to("#ph", { y: 1180, duration: 0.3, ease: "power2.in" }, 19.12);
+
+      window.__timelines = window.__timelines || {};
+      window.__timelines["hud"] = tl;
+    })();
+  </script>
+</template>

@@ -1,0 +1,418 @@
+{
+  "track": "assets/track.mp3",
+  "duration": 26.68,
+  "fps": 30,
+  "tempoBpm": 143.5,
+  "beatSec": 0.418,
+  "method": "Demucs vocal stem -> faster-whisper large-v3 word timestamps (with and without lyric prompt, cross-checked) + vocal RMS/onset envelope. Words verified against the supplied lyric text.",
+  "sections": [
+    {
+      "id": "A",
+      "start": 0.0,
+      "end": 12.28,
+      "scene": "Corridor (inside the head) - loop"
+    },
+    {
+      "id": "B",
+      "start": 12.28,
+      "end": 22.74,
+      "scene": "Room, 05:00"
+    },
+    {
+      "id": "C",
+      "start": 22.74,
+      "end": 24.38,
+      "scene": "Dream: waking on the corridor floor"
+    },
+    {
+      "id": "D",
+      "start": 24.38,
+      "end": 26.68,
+      "scene": "RESTART? screen"
+    }
+  ],
+  "accents": {
+    "lampsOnKicks": [
+      2.21,
+      2.62,
+      3.09
+    ],
+    "stampBeats": [
+      5.32,
+      5.71,
+      6.13
+    ],
+    "vocalGap": [
+      6.52,
+      7.04
+    ],
+    "stampBursts": [
+      7.04,
+      7.36,
+      7.59
+    ],
+    "doorOpen": 9.22,
+    "blackoutKick": 12.12,
+    "energyPeak": 20.54
+  },
+  "lines": [
+    {
+      "id": "L1",
+      "text": "я потерялся в своей голове",
+      "start": 0.2,
+      "end": 2.16,
+      "words": [
+        [
+          "я",
+          0.2
+        ],
+        [
+          "потерялся",
+          0.28
+        ],
+        [
+          "в",
+          1.14
+        ],
+        [
+          "своей",
+          1.16
+        ],
+        [
+          "голове",
+          1.42
+        ]
+      ],
+      "object": "Dark-red paint on the left corridor wall (already there), found by the flashlight beam word by word",
+      "camera": "Starts turned to the wall, drifts forward 0.4 m; flashlight sweeps line 1 then line 2"
+    },
+    {
+      "id": "L2",
+      "text": "ну кто же мне поможет найти выход отсюда",
+      "start": 2.22,
+      "end": 5.04,
+      "words": [
+        [
+          "ну",
+          2.22
+        ],
+        [
+          "кто",
+          2.44
+        ],
+        [
+          "же",
+          2.64
+        ],
+        [
+          "мне",
+          2.82
+        ],
+        [
+          "поможет",
+          2.98
+        ],
+        [
+          "найти",
+          3.72
+        ],
+        [
+          "выход",
+          3.98
+        ],
+        [
+          "отсюда",
+          4.5
+        ]
+      ],
+      "object": "In-game dialogue box (typewriter, synced per word); the green 'ВЫХОД' sign over the far door flares on 'выход'",
+      "camera": "Turns from the wall to the corridor, ceiling lamps buzz on along the path on the kicks, walks to the door on the beat"
+    },
+    {
+      "id": "L3",
+      "text": "столько проблем",
+      "start": 5.32,
+      "end": 6.5,
+      "words": [
+        [
+          "столько",
+          5.32
+        ],
+        [
+          "проблем",
+          5.54
+        ]
+      ],
+      "object": "Red stencil stamps: on the door (5.32), left wall (5.71), right wall (6.13); the exit sign dies",
+      "camera": "Stops at the door, slowly steps back to see the stamps multiply"
+    },
+    {
+      "id": "L4",
+      "text": "столько проблем сейчас в моей бошке",
+      "start": 7.04,
+      "end": 9.2,
+      "words": [
+        [
+          "столько",
+          7.04
+        ],
+        [
+          "проблем",
+          7.3
+        ],
+        [
+          "сейчас",
+          7.8
+        ],
+        [
+          "в",
+          8.16
+        ],
+        [
+          "моей",
+          8.42
+        ],
+        [
+          "бошке",
+          8.6
+        ]
+      ],
+      "object": "After the 0.5 s blackout the corridor is covered with the stamp (walls, ceiling, floor); then cascading system error windows titled 'СТОЛЬКО ПРОБЛЕМ' whose body grows 'СЕЙЧАС' -> 'СЕЙЧАС В МОЕЙ' -> 'СЕЙЧАС В МОЕЙ БОШКЕ'",
+      "camera": "Lights snap back on 7.04, slow push toward the door with a slight roll"
+    },
+    {
+      "id": "L5",
+      "text": "и я не знаю как мне выйти с этого круга",
+      "start": 9.22,
+      "end": 12.26,
+      "words": [
+        [
+          "и",
+          9.22
+        ],
+        [
+          "я",
+          9.48
+        ],
+        [
+          "не",
+          9.52
+        ],
+        [
+          "знаю",
+          9.74
+        ],
+        [
+          "как",
+          10.26
+        ],
+        [
+          "мне",
+          10.42
+        ],
+        [
+          "выйти",
+          10.66
+        ],
+        [
+          "с",
+          11.1
+        ],
+        [
+          "этого",
+          11.18
+        ],
+        [
+          "круга",
+          11.64
+        ]
+      ],
+      "object": "The door opens onto the SAME corridor (loop). Text painted on the floor as a closed circle; letters light up as sung",
+      "camera": "Walks through the door, tilts down over the circle, then rotates to follow the reading position (the camera literally goes round the circle); blackout on the 12.12 kick"
+    },
+    {
+      "id": "L6",
+      "text": "на часах пять утра, я снова не сплю",
+      "start": 12.28,
+      "end": 15.44,
+      "words": [
+        [
+          "на",
+          12.28
+        ],
+        [
+          "часах",
+          12.46
+        ],
+        [
+          "пять",
+          13.2
+        ],
+        [
+          "утра",
+          13.48
+        ],
+        [
+          "я",
+          14.08
+        ],
+        [
+          "снова",
+          14.38
+        ],
+        [
+          "не",
+          14.8
+        ],
+        [
+          "сплю",
+          15.18
+        ]
+      ],
+      "object": "LED alarm clock: 'НА ЧАСАХ' / '05:00' / 'ПЯТЬ УТРА' light up in sync; then scratched text 'Я СНОВА НЕ СПЛЮ' under tally marks on the wall over the bed",
+      "camera": "Eyes open in the room, dolly in to the clock, then turn left to the wall above the bed"
+    },
+    {
+      "id": "L7",
+      "text": "мониторю твой канал",
+      "start": 15.5,
+      "end": 17.3,
+      "words": [
+        [
+          "мониторю",
+          15.6
+        ],
+        [
+          "твой",
+          16.8
+        ],
+        [
+          "канал",
+          17.04
+        ]
+      ],
+      "object": "CRT showing a messenger (Telegram-style) channel: status 'МОНИТОРЮ' typed in the app bar, channel header with round avatar 'ТВОЙ КАНАЛ', feed of post bubbles with view-count eyes (no invented names or text)",
+      "camera": "Turn to the desk, dolly in until the screen fills most of the frame"
+    },
+    {
+      "id": "L8",
+      "text": "звонка от тя жду",
+      "start": 17.3,
+      "end": 18.94,
+      "words": [
+        [
+          "звонка",
+          17.3
+        ],
+        [
+          "от",
+          18.04
+        ],
+        [
+          "тя",
+          18.34
+        ],
+        [
+          "жду",
+          18.68
+        ]
+      ],
+      "object": "Incoming-call window on the CRT that never connects: phone icon, 'ЗВОНКА' / 'ОТ ТЯ ЖДУ', pulsing dots",
+      "camera": "Holds on the screen, slow drift"
+    },
+    {
+      "id": "L9",
+      "text": "глаза слипаются я скоро попаду в царство снов",
+      "start": 19.14,
+      "end": 22.6,
+      "words": [
+        [
+          "глаза",
+          19.14
+        ],
+        [
+          "слипаются",
+          19.6
+        ],
+        [
+          "я",
+          20.46
+        ],
+        [
+          "скоро",
+          20.6
+        ],
+        [
+          "попаду",
+          20.96
+        ],
+        [
+          "в",
+          21.74
+        ],
+        [
+          "царство",
+          21.76
+        ],
+        [
+          "снов",
+          22.3
+        ]
+      ],
+      "object": "'ГЛАЗА СЛИПАЮТСЯ' as a status message while eyelids flutter; 'Я СКОРО ПОПАДУ' / 'В ЦАРСТВО СНОВ' as a new-area title card",
+      "camera": "Pulls back from the monitor, droops, falls sideways onto the pillow; eyelids close fully by 22.3"
+    },
+    {
+      "id": "L10",
+      "text": "но проснусь ли завтра я",
+      "start": 22.74,
+      "end": 24.38,
+      "words": [
+        [
+          "но",
+          22.74
+        ],
+        [
+          "проснусь",
+          22.92
+        ],
+        [
+          "ли",
+          23.56
+        ],
+        [
+          "завтра",
+          23.74
+        ],
+        [
+          "я",
+          24.16
+        ]
+      ],
+      "object": "Dialogue box (same as L2) over a slit of open eyes: lying on the floor of the first corridor again",
+      "camera": "Static, head on the floor, rolled 75 degrees; eyelids crack open then close"
+    },
+    {
+      "id": "L11",
+      "text": "вот это вопрос",
+      "start": 24.38,
+      "end": 25.7,
+      "words": [
+        [
+          "вот",
+          24.42
+        ],
+        [
+          "это",
+          24.8
+        ],
+        [
+          "вопрос",
+          25.38
+        ]
+      ],
+      "object": "Black game-over screen: 'ВОТ ЭТО ВОПРОС' word by word, then 'RESTART?' with '> YES / NO'; the cursor never moves",
+      "camera": "None (UI screen), hold to the end of the track"
+    }
+  ]
+}

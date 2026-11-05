@@ -1,0 +1,1017 @@
+<template>
+  <style>
+    @font-face {
+      font-family: "PS2P";
+      src: url("assets/fonts/PressStart2P.ttf");
+    }
+    #root {
+      position: absolute;
+      inset: 0;
+      background: #000;
+      overflow: hidden;
+    }
+    #w-canvas {
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 1500px;
+      height: 1500px;
+      display: block;
+      image-rendering: pixelated;
+    }
+  </style>
+  <div id="root" data-composition-id="world" data-width="1500" data-height="1500" data-duration="26.68">
+    <canvas id="w-canvas" width="500" height="500" data-layout-allow-overflow></canvas>
+  </div>
+  <script>
+    window.__hf = window.__hf || {};
+    window.__hf.buildReady = window.__hf.buildReady || {};
+    window.__hf.buildReady["mw-world"] = new Promise((r) => (window.__mwWorldBuilt = r));
+    (function () {
+      const clock = { v: 0 };
+      const tl = gsap.timeline({ paused: true });
+      tl.to(clock, { v: 1, duration: 26.68, ease: "none" }, 0);
+      window.__timelines = window.__timelines || {};
+      window.__timelines["world"] = tl;
+    })();
+  </script>
+  <script type="module">
+    import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.181.2/+esm";
+    import { GLTFLoader } from "https://cdn.jsdelivr.net/npm/three@0.181.2/examples/jsm/loaders/GLTFLoader.js/+esm";
+
+    // =====================================================================
+    // timing (transcript/TRANSCRIPT.md + lyrics-timing.json)
+    // =====================================================================
+    const DUR = 26.68, FPS = 30, W = 500;
+    const T = {
+      A2: 1.85, B1: 3.0, B2: 4.45, C1: 5.32, GAP0: 6.52, C2: 7.04, WHIP: 8.6, WHIP2: 8.98, D1: 9.22, LOOP: 11.64, SNAP: 12.0, BLK: 12.12,
+      E1: 12.28, PYAT: 13.2, OFF: 14.08, ON: 14.38, F1: 15.44, TYPE: 17.3, G1: 19.14, H1: 22.74, VOT: 24.38, EYES: 25.38, RED: 25.44, END: 26.09,
+    };
+    const TRANS = [[T.B1, 0.35, "mix"], [T.F1, 0.3, "mix"], [T.H1, 0.4, "mix"]];
+
+    // =====================================================================
+    // helpers
+    // =====================================================================
+    const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+    const lerp = (a, b, u) => a + (b - a) * u;
+    const smooth = (u) => { u = clamp(u, 0, 1); return u * u * (3 - 2 * u); };
+    const ramp = (t, a, b) => clamp((t - a) / (b - a), 0, 1);
+    const frameOf = (t) => Math.floor(t * FPS + 1e-4);
+    function hash1(n) { const x = Math.sin(n * 127.1 + 311.7) * 43758.5453; return x - Math.floor(x); }
+    function mulberry32(a) { return function () { a |= 0; a = (a + 0x6d2b79f5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
+    const DEG = Math.PI / 180;
+    // Blender (x, y, z-up) → three (x, z, -y)
+    const B = (x, y, z) => new THREE.Vector3(x, z, -y);
+    function env(keys, t) {
+      if (t <= keys[0][0]) return keys[0][1];
+      for (let i = 0; i < keys.length - 1; i++) { const [t0, v0] = keys[i], [t1, v1] = keys[i + 1]; if (t < t1) return lerp(v0, v1, smooth((t - t0) / (t1 - t0))); }
+      return keys[keys.length - 1][1];
+    }
+    function cr(p0, p1, p2, p3, u) { const u2 = u * u, u3 = u2 * u; return 0.5 * (2 * p1 + (-p0 + p2) * u + (2 * p0 - 5 * p1 + 4 * p2 - p3) * u2 + (-p0 + 3 * p1 - 3 * p2 + p3) * u3); }
+    // keys: [t, x, y, z, yaw, pitch]  (Blender coords; yaw 0 = +Y north, 90 = +X east; pitch + = up)
+    function path(keys, t, easeEnds = true) {
+      const n = keys.length;
+      if (t <= keys[0][0]) return keys[0].slice(1);
+      if (t >= keys[n - 1][0]) return keys[n - 1].slice(1);
+      let i = 0; while (i < n - 2 && t >= keys[i + 1][0]) i++;
+      let u = (t - keys[i][0]) / (keys[i + 1][0] - keys[i][0]);
+      if (easeEnds) {
+        if (n === 2) u = smooth(u);
+        else if (i === 0) u = 0.5 * u + 0.5 * (1 - Math.cos(u * Math.PI / 2));
+        else if (i === n - 2) u = 0.5 * u + 0.5 * Math.sin(u * Math.PI / 2);
+      }
+      const k0 = keys[Math.max(0, i - 1)], k1 = keys[i], k2 = keys[i + 1], k3 = keys[Math.min(n - 1, i + 2)];
+      const out = [];
+      for (let c = 1; c < 6; c++) out.push(cr(k0[c], k1[c], k2[c], k3[c], u));
+      return out;
+    }
+
+    // ---------------- bitmap font from Press Start 2P (crisp, thresholded, cached per colour)
+    const GLY = new Map();
+    function glyph(ch, size, color) {
+      const key = ch + "|" + size + "|" + color;
+      if (GLY.has(key)) return GLY.get(key);
+      const c = document.createElement("canvas"); c.width = size; c.height = size;
+      const g = c.getContext("2d");
+      g.font = size + 'px "PS2P"'; g.textBaseline = "top"; g.fillStyle = "#fff"; g.fillText(ch, 0, 0);
+      const d = g.getImageData(0, 0, size, size), a = d.data;
+      for (let i = 3; i < a.length; i += 4) a[i] = a[i] >= 110 ? 255 : 0;
+      g.putImageData(d, 0, 0);
+      g.globalCompositeOperation = "source-in"; g.fillStyle = color; g.fillRect(0, 0, size, size);
+      GLY.set(key, c); return c;
+    }
+    function txt(g, s, x, y, color, size = 8, align = "left", shadow = null) {
+      s = String(s);
+      const w = s.length * size;
+      if (align === "center") x -= Math.floor(w / 2); else if (align === "right") x -= w;
+      x = Math.round(x); y = Math.round(y);
+      for (let i = 0; i < s.length; i++) {
+        const ch = s[i]; if (ch === " ") continue;
+        if (shadow) g.drawImage(glyph(ch, size, shadow), x + i * size + Math.max(1, size / 8), y + Math.max(1, size / 8));
+        g.drawImage(glyph(ch, size, color), x + i * size, y);
+      }
+      return w;
+    }
+    // words sung by time: "слово@время" → visible prefix of a line at time t (letters spread over the word)
+    function sung(spec, t) {
+      let out = "";
+      const toks = spec.split(" ").map((tok) => { const at = tok.lastIndexOf("@"); return [tok.slice(0, at), parseFloat(tok.slice(at + 1))]; });
+      for (let i = 0; i < toks.length; i++) {
+        const [w, s] = toks[i];
+        if (t < s) break;
+        const next = i < toks.length - 1 ? toks[i + 1][1] : s + 0.5;
+        const span = Math.min(0.055 * w.length, Math.max(0.03, next - s - 0.02));
+        const n = Math.min(w.length, Math.floor(((t - s) / span) * w.length) + 1);
+        out += (i ? " " : "") + w.slice(0, n);
+      }
+      return out;
+    }
+    function cnv(w, h) { const c = document.createElement("canvas"); c.width = w; c.height = h; const g = c.getContext("2d"); g.imageSmoothingEnabled = false; return [c, g]; }
+
+    // =====================================================================
+    // PS1 materials: vertex snap + partially affine UVs (+ optional wall warp for the loop beat)
+    // =====================================================================
+    const SNAP = 170.0;
+    const WARP = { value: 0 }, WTIME = { value: 0 };
+    function ps1(mat, aff = 0.3, warp = false) {
+      mat.onBeforeCompile = (s) => {
+        s.uniforms.uWarp = WARP; s.uniforms.uWTime = WTIME;
+        s.vertexShader = "uniform float uWarp; uniform float uWTime; varying vec3 vAff;\n" + s.vertexShader.replace(
+          "#include <begin_vertex>",
+          `#include <begin_vertex>
+           ${warp ? `{ vec4 wp = modelMatrix * vec4(transformed, 1.0);
+             float r = length(wp.xz);
+             vec3 off = vec3(sin(wp.y * 2.3 + uWTime * 3.1) * 0.35, sin(r * 1.7 - uWTime * 2.0) * 0.45, cos(wp.y * 1.9 + uWTime * 2.6) * 0.35) * uWarp;
+             transformed += (inverse(mat3(modelMatrix)) * off); }` : ""}`,
+        ).replace(
+          "#include <project_vertex>",
+          `#include <project_vertex>
+           { vec4 sp = gl_Position; sp.xy = floor(sp.xy / sp.w * ${SNAP.toFixed(1)} + 0.5) / ${SNAP.toFixed(1)} * sp.w; gl_Position = sp; }
+           #ifdef USE_MAP
+             vAff = vec3(vMapUv * gl_Position.w, gl_Position.w);
+           #else
+             vAff = vec3(0.0, 0.0, 1.0);
+           #endif`);
+        s.fragmentShader = "varying vec3 vAff;\n" + s.fragmentShader.replace(
+          "#include <map_fragment>",
+          `#ifdef USE_MAP
+             vec2 affUv = mix(vMapUv, vAff.xy / vAff.z, ${aff.toFixed(2)});
+             vec4 sampledDiffuseColor = texture2D(map, affUv);
+             diffuseColor *= sampledDiffuseColor;
+           #endif`);
+      };
+      mat.customProgramCacheKey = () => "ps1-" + aff.toFixed(2) + (warp ? "w" : "");
+      return mat;
+    }
+
+    // =====================================================================
+    // renderer + targets
+    // =====================================================================
+    const canvas = document.getElementById("w-canvas");
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, alpha: false, preserveDrawingBuffer: true });
+    renderer.setPixelRatio(1);
+    renderer.setSize(W, W, false);
+    renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
+    const RT = (w, h = w, nearest = false) => new THREE.WebGLRenderTarget(w, h, { minFilter: nearest ? THREE.NearestFilter : THREE.LinearFilter, magFilter: nearest ? THREE.NearestFilter : THREE.LinearFilter, type: THREE.HalfFloatType });
+    const rt = RT(W, W, true), rtPrev = RT(W, W, true), rtB1 = RT(125), rtB2 = RT(125);
+    // small LDR target for CCTV feeds / phone photos (read back into canvases)
+    const rtCam = new THREE.WebGLRenderTarget(128, 96, { minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter, type: THREE.UnsignedByteType });
+    const camBuf = new Uint8Array(128 * 96 * 4);
+    const FW = 128, FH = 96;
+
+    const scene = new THREE.Scene();
+    scene.fog = new THREE.Fog(0x000000, 4, 16);
+    const camera = new THREE.PerspectiveCamera(64, 1, 0.03, 40);
+    scene.add(camera);
+    const secCam = new THREE.PerspectiveCamera(70, 128 / 96, 0.05, 30);
+    const amb = new THREE.AmbientLight(0xffffff, 0.06);
+    scene.add(amb);
+
+    // =====================================================================
+    // GLB → PS1 materials, lights, screens
+    // =====================================================================
+    const loader = new GLTFLoader();
+    function aoRemap(geom, strength) {
+      const a = geom.attributes.color;
+      const out = new Float32Array(a.count * 3);
+      for (let i = 0; i < a.count; i++) { const v = lerp(1, Math.pow(a.getX(i), 0.62), strength); out[i * 3] = out[i * 3 + 1] = out[i * 3 + 2] = v; }
+      geom.setAttribute("color", new THREE.BufferAttribute(out, 3));
+    }
+    function nearestTex(t) { t.magFilter = t.minFilter = THREE.NearestFilter; t.generateMipmaps = false; t.colorSpace = THREE.SRGBColorSpace; t.flipY = false; t.needsUpdate = true; return t; }
+    const SCR = {};
+    function screenFor(name, w, h) {
+      if (SCR[name]) return SCR[name];
+      const [c, g] = cnv(w, h);
+      const tex = nearestTex(new THREE.CanvasTexture(c));
+      return (SCR[name] = { c, g, tex, w, h, meshes: [] });
+    }
+    const SCREEN_SIZES = {
+      diag: [160, 120], main: [176, 116], sec: [128, 96], keypad: [96, 64], vitals: [144, 100], secmed: [128, 96], cap_ctl: [96, 56],
+      clock: [192, 72], ring: [128, 88], phone: [112, 240], phone_lk: [32, 64], stars: [48, 48], atlas: [1024, 384],
+    };
+    function convert(root, opts = {}) {
+      const room = { root, L: {}, emit: [], mats: [], dyn: {} };
+      root.traverse((o) => {
+        if (o.name.startsWith("L_") && o.userData.color) {
+          const [r, g, b] = o.userData.color;
+          const L = new THREE.PointLight(new THREE.Color(r, g, b), o.userData.power * 11, o.userData.dist * 1.3, 1.3);
+          L.userData = { base: new THREE.Color(r, g, b), power: o.userData.power };
+          o.add(L); room.L[o.name.slice(2)] = L;
+        }
+        if (o.name.startsWith("DYN_") || o.name.startsWith("FLESH_") || o.name.startsWith("FACE_") || o.name.startsWith("CAM_") || o.name.startsWith("FIG_")) room.dyn[o.name] = o;
+        if (!o.isMesh) return;
+        const src = o.material, name = src.name || "";
+        const map = src.map ? nearestTex(src.map) : null;
+        const hasVC = !!o.geometry.attributes.color;
+        if (hasVC) aoRemap(o.geometry, opts.ao ?? 0.85);
+        if (o.name.startsWith("SCR")) {
+          const key = o.name.startsWith("SCRA_") ? "atlas" : o.name.slice(4);
+          const sz = SCREEN_SIZES[key] || [64, 48];
+          const s = screenFor(opts.prefix && key === "atlas" ? opts.prefix + "atlas" : key, sz[0], sz[1]);
+          o.material = ps1(new THREE.MeshBasicMaterial({ map: s.tex, fog: false, toneMapped: false, polygonOffset: true, polygonOffsetFactor: -2 }), 0);
+          o.material.color.setScalar(1.0);
+          s.meshes.push(o);
+          room.dyn[o.name] = o;
+        } else if (name.startsWith("EMIT_")) {
+          const base = src.emissive.clone();
+          o.material = ps1(new THREE.MeshBasicMaterial({ color: base.clone() }), 0);
+          o.material.userData.base = base;
+          room.emit.push(o);
+        } else if (name === "glass") {
+          o.material = new THREE.MeshBasicMaterial({ map, transparent: true, opacity: 0.6, depthWrite: false, color: 0x9ab0ac, side: THREE.DoubleSide });
+        } else {
+          const isDec = name.startsWith("sg_") || name.startsWith("poster") || name === "gauge" || o.name.startsWith("DEC_");
+          const warp = !!opts.warp && !o.name.startsWith("DYN_ring") && !o.name.startsWith("FLESH");
+          o.material = ps1(new THREE.MeshLambertMaterial({ map, vertexColors: hasVC, color: map ? 0xffffff : src.color, side: name.startsWith("face") || isDec ? THREE.DoubleSide : THREE.FrontSide }), isDec || o.name.startsWith("FACE") ? 0 : 0.3, warp);
+          if (isDec) { o.material.polygonOffset = true; o.material.polygonOffsetFactor = -2; }
+          o.material.userData.base = o.material.color.clone();
+          room.mats.push(o.material);
+        }
+      });
+      return room;
+    }
+
+    // =====================================================================
+    // post: bloom + per-scene monochrome ramp + dither + analog capture
+    // =====================================================================
+    const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2));
+    const postScene = new THREE.Scene(); postScene.add(quad);
+    const postCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+    const VS = `varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`;
+    const brightM = new THREE.ShaderMaterial({ uniforms: { t: { value: null }, thr: { value: 0.5 } }, vertexShader: VS, depthTest: false,
+      fragmentShader: `uniform sampler2D t; uniform float thr; varying vec2 vUv;
+        void main(){ vec3 c = vec3(0.0); for(int i=0;i<4;i++) for(int j=0;j<4;j++) c += texture2D(t, vUv + (vec2(i,j)-1.5)/500.0).rgb; c/=16.0;
+        float l = max(c.r, max(c.g, c.b)); gl_FragColor = vec4(c * smoothstep(thr, thr + 0.45, l), 1.0); }` });
+    const blurM = new THREE.ShaderMaterial({ uniforms: { t: { value: null }, dir: { value: new THREE.Vector2(1, 0) } }, vertexShader: VS, depthTest: false,
+      fragmentShader: `uniform sampler2D t; uniform vec2 dir; varying vec2 vUv;
+        void main(){ vec3 c = texture2D(t, vUv).rgb * 0.2270;
+          c += (texture2D(t, vUv + dir*1.3846/125.0).rgb + texture2D(t, vUv - dir*1.3846/125.0).rgb) * 0.3162;
+          c += (texture2D(t, vUv + dir*3.2308/125.0).rgb + texture2D(t, vUv - dir*3.2308/125.0).rgb) * 0.0703;
+          gl_FragColor = vec4(c, 1.0); }` });
+    const post = new THREE.ShaderMaterial({
+      uniforms: {
+        tScene: { value: rt.texture }, tPrev: { value: rtPrev.texture }, uMix: { value: 1 }, tBloom: { value: rtB1.texture }, res: { value: new THREE.Vector2(W, W) },
+        uBloom: { value: 0.9 }, uMono: { value: 0.7 }, c1: { value: new THREE.Color() }, c2: { value: new THREE.Color() }, c3: { value: new THREE.Color() },
+        uExpo: { value: 1.0 }, uFade: { value: 1 }, uLid: { value: 0 }, uFrame: { value: 0 }, uGrain: { value: 0.035 }, uAb: { value: 0.7 }, uTear: { value: 0 }, uTearY: { value: 0.5 },
+      },
+      vertexShader: VS, depthTest: false, depthWrite: false,
+      fragmentShader: `
+        uniform sampler2D tScene, tPrev, tBloom; uniform vec2 res; uniform float uMix, uBloom, uMono, uExpo, uFade, uLid, uFrame, uGrain, uAb, uTear, uTearY;
+        uniform vec3 c1, c2, c3;
+        varying vec2 vUv;
+        float hash(vec2 p){ vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
+        float bayer2(vec2 a){ a = floor(a); return fract(dot(a, vec2(0.5, a.y * 0.75))); }
+        float bayer4(vec2 a){ return bayer2(0.5 * a) * 0.25 + bayer2(a); }
+        vec3 rampc(float l){ return l < 0.3 ? mix(vec3(0.0), c1, l / 0.3) : (l < 0.68 ? mix(c1, c2, (l - 0.3) / 0.38) : mix(c2, c3, (l - 0.68) / 0.32)); }
+        vec3 samp(sampler2D s, vec2 uv, float ab){ return vec3(texture2D(s, uv + vec2(ab, 0.0)).r, texture2D(s, uv).g, texture2D(s, uv - vec2(ab, 0.0)).b); }
+        void main(){
+          vec2 px = floor(vUv * res); vec2 uv = (px + 0.5) / res;
+          float band = step(abs(uv.y - uTearY), 0.025) * uTear;
+          uv.x += band * (hash(vec2(px.y, uFrame)) - 0.5) * 0.08;
+          vec2 d = uv - 0.5;
+          float ab = (uAb + band * 3.0) / res.x * (0.5 + 2.5 * dot(d, d));
+          vec3 c = mix(samp(tPrev, uv, ab), samp(tScene, uv, ab), uMix);
+          c += texture2D(tBloom, uv).rgb * uBloom;
+          c = pow(max(c * uExpo, 0.0), vec3(1.0 / 2.2));
+          float l = clamp(dot(c, vec3(0.3, 0.55, 0.15)), 0.0, 1.0);
+          c = mix(c, rampc(l), uMono);
+          c = mix(c, c * c * (3.0 - 2.0 * c), 0.3);
+          c *= 1.0 - dot(d, d) * 1.2;
+          c *= uFade;
+          if (uLid > 0.001) {
+            float lid = (0.5 - 0.5 * uLid) * (1.0 - 0.3 * pow(abs(d.x) * 2.0, 2.0));
+            c *= 1.0 - smoothstep(lid - 0.05, lid, abs(d.y));
+          }
+          c += (hash(px + uFrame * 7.13) - 0.5) * uGrain;
+          c *= 0.97 + 0.03 * mod(px.y, 2.0);
+          float b = bayer4(px) - 0.5;
+          c = floor(c * 24.0 + 0.5 + b * 0.95) / 24.0;
+          gl_FragColor = vec4(clamp(c, 0.0, 1.0), 1.0);
+        }`,
+    });
+    function pass(material, target) { quad.material = material; renderer.setRenderTarget(target); renderer.render(postScene, postCam); }
+
+    // =====================================================================
+    // build
+    // =====================================================================
+    let built = false, pending = null;
+    const R = {};
+    const S = {};
+    async function build() {
+      await document.fonts.load('8px "PS2P"', "ДИАГНОСТИКА СОН ЧСС ЭЭГ ЗАПРЕЩЁН");
+      await document.fonts.load('16px "PS2P"', "СТОЛЬКО ПРОБЛЕМ");
+      const names = ["med", "corr", "ctrl", "ring", "quarters", "crew"];
+      const gl = await Promise.all(names.map((n) => loader.loadAsync("assets/models/" + n + ".glb")));
+      names.forEach((n, i) => {
+        if (n === "crew") return;
+        R[n] = convert(gl[i].scene, { warp: n === "ring", ao: n === "ctrl" ? 0.9 : 0.85 });
+        R[n].root.visible = false; scene.add(R[n].root);
+      });
+      // ---- crew: split the glb into figure / patient / hand groups
+      const crew = convert(gl[5].scene, { ao: 0.6 });
+      const mk = (prefix, faceName, off) => {
+        const g = new THREE.Group();
+        const parts = [];
+        crew.root.traverse((o) => { if (o.isMesh && (o.name.startsWith(prefix) || o.name === faceName || (prefix === "HAND_" && o.name === "SCR_phone"))) parts.push(o); });
+        parts.forEach((o) => { o.position.add(off); g.add(o); });
+        return g;
+      };
+      const faceMats = {};
+      const texLoad = (name) => { const c = crew.root.getObjectByName("FACE_stand"); return c.material.map; };
+      S.figTemplate = mk("STAND_", "FACE_stand", new THREE.Vector3(0, 0, 0));
+      S.patient = mk("LIE_", "FACE_lie", B(-5.74, 1.7, 0.52));
+      S.hand = mk("HAND_", "-", B(-10, 0, -0.05));
+      S.faceLie = S.patient.getObjectByName("FACE_lie");
+      // eyes-open texture: same atlas slot, swapped canvas
+      S.faceClosedTex = S.faceLie.material.map;
+      S.faceOpenTex = null;
+      const fig = (layer) => { const g = S.figTemplate.clone(true); g.traverse((o) => { if (o.isMesh) { o.material = o.material.clone(); o.layers.set(layer); } }); g.layers.set(layer); return g; };
+      S.fig = fig(0); S.figSec = fig(1); S.hero = fig(1);
+      // the stranger is the same man, only darker — a shape more than a person
+      S.fig.traverse((o) => { if (o.isMesh) o.material.color.multiplyScalar(0.4); });
+      S.figSec.traverse((o) => { if (o.isMesh) o.material.color.multiplyScalar(0.75); });
+      [S.fig, S.figSec, S.hero].forEach((g) => { g.visible = false; scene.add(g); });
+      S.patient.traverse((o) => { if (o.isMesh) { o.material.color.multiplyScalar(0.72); o.material.userData.base = o.material.color.clone(); } });
+      S.patient.visible = false; scene.add(S.patient);
+      S.hand.visible = false; camera.add(S.hand);
+      // the hand sits centimetres from the lens and every room light hits it: keep it a dim, dirty silhouette
+      S.hand.traverse((o) => { if (o.isMesh && !o.name.startsWith("SCR")) { o.material.color.multiplyScalar(o.name.includes("skin") ? 0.38 : 0.6); o.material.userData.base = o.material.color.clone(); } });
+      S.hand.scale.setScalar(1);
+      // eyes-open face texture
+      await new Promise((res) => { new THREE.TextureLoader().load("assets/tex/face_open.png", (t) => { S.faceOpenTex = nearestTex(t); res(); }, undefined, res); });
+      // ---- handy references
+      S.door = R.corr.dyn.DYN_exit;
+      S.ring = R.ring.dyn.DYN_ring;
+      S.ringB = R.ring.dyn.DYN_ringB; S.ringC = R.ring.dyn.DYN_ringC; S.ringD = R.ring.dyn.DYN_ringD;
+      S.flesh = Object.keys(R.ring.dyn).filter((k) => k.startsWith("FLESH_")).map((k) => R.ring.dyn[k]);
+      S.flesh.forEach((f) => { f.userData.s0 = f.scale.clone(); f.visible = false; });
+      S.lk = R.quarters.root.getObjectByName("DYN_LK2");
+      S.lk.userData.ry0 = S.lk.rotation.y;
+      S.handLight = new THREE.PointLight(0x9ac8ff, 0.9, 1.4, 1.5); S.handLight.position.set(0, 0.02, 0.12); S.hand.add(S.handLight);
+      [S.ringB, S.ringC, S.ringD].forEach((r) => (r.visible = false));
+      S.chairA = R.quarters.dyn.DYN_chairA; S.chairB = R.quarters.dyn.DYN_chairB; S.items = R.quarters.dyn.DYN_items;
+      [S.chairA, S.chairB, S.items].forEach((o) => { o.userData.p0 = o.position.clone(); o.userData.r0 = o.rotation.clone(); });
+      S.bcn = [0, 1, 2, 3, 4, 5].map((i) => R.ctrl.root.getObjectByName("DYN_bcn" + i));
+      S.ind = []; R.quarters.root.traverse((o) => { if (o.name.startsWith("DYN_ind") && o.isMesh) S.ind.push(o); });
+      S.chairCtrl = R.ctrl.dyn.DYN_chair_ctrl;
+      // world-space screen poses (for camera placement)
+      scene.updateMatrixWorld(true);
+      S.secScreen = R.ctrl.root.getObjectByName("SCR_sec");
+      buildPhotos();
+      built = true;
+      renderAt(pending ?? (window.__hfThreeTime || 0));
+      window.__mwWorldBuilt && window.__mwWorldBuilt();
+    }
+
+    // =====================================================================
+    // room / light state
+    // =====================================================================
+    function show(name) { for (const k in R) R[k].root.visible = k === name; }
+    function lights(room, map) {
+      // map: name → [intensityScale, colorHex?]; unspecified lights are off
+      for (const k in room.L) {
+        const L = room.L[k];
+        const v = map[k];
+        if (v === undefined) { L.intensity = 0; continue; }
+        const [s, col] = Array.isArray(v) ? v : [v, null];
+        L.intensity = L.userData.power * 11 * s;
+        if (col) L.color.set(col); else L.color.copy(L.userData.base);
+      }
+    }
+    function emitScale(room, fn) { for (const o of room.emit) { const b = o.material.userData.base; const k = fn(o.material.name || "", o); o.material.color.copy(b).multiplyScalar(k); } }
+    function tint(room, col, k) { for (const m of room.mats) { m.color.copy(m.userData.base); if (k > 0) m.color.lerp(new THREE.Color(col), k); } }
+
+    // =====================================================================
+    // screens (canvas)
+    // =====================================================================
+    const G_GRN = "#5dff7a", G_DIM = "#1d6a2c", G_BG = "#021306", R_RED = "#ff3a22", R_BG = "#1a0402";
+    function scanFill(g, w, h, bg, t, amt = 0.25) {
+      g.fillStyle = bg; g.fillRect(0, 0, w, h);
+      g.fillStyle = "rgba(0,0,0," + amt + ")"; for (let y = 0; y < h; y += 2) g.fillRect(0, y, w, 1);
+    }
+    function noiseLines(g, x, y, w, h, color, seed, t, rows = 0) {
+      const rnd = mulberry32(seed * 977 + Math.floor(t * 6));
+      g.fillStyle = color;
+      for (let yy = y; yy < y + h; yy += 3) { let xx = x; const end = x + w * (0.4 + 0.6 * rnd()); while (xx < end) { const l = 1 + Math.floor(rnd() * 5); if (rnd() < 0.75) g.fillRect(xx, yy, l, 1); xx += l + 1; } }
+    }
+    // ---- A: neural diagnostic with a rotating wireframe head + the first line
+    const HEAD = (() => { const P = []; for (let la = -6; la <= 6; la++) { const a = la / 6 * 1.25; const ring = []; for (let lo = 0; lo <= 16; lo++) { const b = lo / 16 * Math.PI * 2; const rx = Math.cos(a) * (0.8 + 0.12 * Math.max(0, Math.sin(b))) * (la > 2 ? 1 - (la - 2) * 0.05 : 1); ring.push([Math.cos(b) * rx * 0.82, Math.sin(a) * 1.05 - (la < -3 ? 0.05 : 0), Math.sin(b) * rx]); } P.push(ring); } return P; })();
+    function drawHead(g, cx, cy, sc, rot, color, t) {
+      g.fillStyle = color;
+      const pr = (p) => { const c = Math.cos(rot), s = Math.sin(rot); const x = p[0] * c + p[2] * s, z = -p[0] * s + p[2] * c; const k = 2.6 / (2.6 + z); return [cx + x * sc * k, cy - p[1] * sc * k]; };
+      const line = (a, b) => { const n = Math.ceil(Math.max(Math.abs(b[0] - a[0]), Math.abs(b[1] - a[1]))); for (let i = 0; i <= n; i++) g.fillRect(Math.round(lerp(a[0], b[0], i / n)), Math.round(lerp(a[1], b[1], i / n)), 1, 1); };
+      for (let i = 0; i < HEAD.length; i += 2) for (let j = 0; j < 16; j++) line(pr(HEAD[i][j]), pr(HEAD[i][j + 1]));
+      for (let j = 0; j < 16; j += 2) for (let i = 0; i < HEAD.length - 1; i++) line(pr(HEAD[i][j]), pr(HEAD[i + 1][j]));
+    }
+    const VITALS = ["ЧСС  041", "ЭЭГ θ 6.2", "СОН  97%"];
+    function drawDiag(t) {
+      const s = SCR.diag; if (!s) return; const g = s.g, w = s.w, h = s.h;
+      scanFill(g, w, h, G_BG, t);
+      txt(g, "НЕЙРОСКАН", 4, 3, G_GRN); txt(g, "UNIT 1", w - 4, 3, G_DIM, 8, "right");
+      g.fillStyle = G_DIM; g.fillRect(4, 13, w - 8, 1);
+      const pulse = 0.5 + 0.5 * Math.sin(t * 9);
+      drawHead(g, 48, 52, 30, t * 0.9, G_GRN, t);
+      // target box on the head, blinking in time
+      if (Math.floor(t * 4) % 2) { g.strokeStyle = R_RED; g.lineWidth = 1; g.strokeRect(36.5, 30.5, 22, 16); }
+      VITALS.forEach((v, i) => txt(g, v, 86, 20 + i * 12, i === 2 ? G_GRN : G_DIM));
+      for (let x = 0; x < 64; x++) { const yy = 66 + Math.round(Math.sin(x * 0.6 + t * 12) * 2 * (x % 16 < 3 ? 3 : 0.4)); g.fillStyle = G_GRN; g.fillRect(86 + x, yy, 1, 1); }
+      // lyric: system output
+      g.fillStyle = G_DIM; g.fillRect(4, 84, w - 8, 1);
+      const l1 = sung("я@0.20 потерялся@0.28", t), l2 = sung("в@1.14 своей@1.16 голове@1.42", t);
+      txt(g, "> " + l1 + (l2 ? "" : (Math.floor(t * 4) % 2 ? "_" : "")), 4, 90, "#c8ffc8");
+      if (l2 || t > 1.1) txt(g, "  " + l2 + (Math.floor(t * 4) % 2 ? "_" : ""), 4, 102, "#c8ffc8");
+      s.tex.needsUpdate = true;
+    }
+    // ---- shared atlas of small monitors (control room + med side modules)
+    const ERR = ["ERROR", "FAULT", "O2 ??", "PUMP 3", "NO SIG", "WARN", "LOOP", "CYCLE"];
+    const LYR = ["СТОЛЬКО", "ПРОБЛЕМ", "СЕЙЧАС", "В МОЕЙ", "БОШКЕ"];
+    function cellState(i, t) {
+      // control room: green normal → wave of red errors on the stamp beats → lyric words → full alarm
+      if (t < T.C1) return 0;
+      const wave = hash1(i * 3.3);
+      const beats = [5.32, 5.71, 6.13];
+      let k = 0; beats.forEach((b, j) => { if (t >= b + wave * 0.25 && wave < (j + 1) / 3) k = 1; });
+      if (t >= T.GAP0 && t < T.C2) return hash1(i * 7.7) < 0.7 ? 3 : k; // silence: screens drop to black
+      if (t >= T.C2) return hash1(i * 5.1) < 0.18 ? 2 : 1;
+      return k;
+    }
+    function drawAtlas(t, which) {
+      const s = SCR.atlas; if (!s) return; const g = s.g;
+      const CW = 64, CH = 48;
+      for (let i = 0; i < 128; i++) {
+        const x = (i % 16) * CW, y = Math.floor(i / 16) * CH;
+        const st = which === "ctrl" ? cellState(i, t) : 0;
+        g.save(); g.beginPath(); g.rect(x, y, CW, CH); g.clip();
+        if (st === 3) { g.fillStyle = "#020202"; g.fillRect(x, y, CW, CH); g.restore(); continue; }
+        const red = st >= 1;
+        const fg = red ? R_RED : G_GRN, dim = red ? "#7a140a" : G_DIM, bg = red ? R_BG : G_BG;
+        g.fillStyle = bg; g.fillRect(x, y, CW, CH);
+        const kind = Math.floor(hash1(i * 1.37) * 4);
+        if (st === 2) {
+          const word = LYR[Math.floor(hash1(i * 2.1) * LYR.length)];
+          txt(g, word, x + CW / 2, y + 20, fg, 8, "center");
+        } else if (red) {
+          const blink = Math.floor(t * 5 + i) % 3 !== 0;
+          g.strokeStyle = fg; g.lineWidth = 1; g.strokeRect(x + 4.5, y + 14.5, CW - 9, 16);
+          if (blink) txt(g, ERR[i % ERR.length], x + CW / 2, y + 19, fg, 8, "center");
+          noiseLines(g, x + 4, y + 35, CW - 8, 10, dim, i, t);
+        } else if (kind === 0) {
+          noiseLines(g, x + 3, y + 3, CW - 6, CH - 6, fg, i, t);
+        } else if (kind === 1) {
+          g.fillStyle = fg; for (let xx = 0; xx < CW - 6; xx++) g.fillRect(x + 3 + xx, y + 24 + Math.round(Math.sin(xx * 0.3 + t * 4 + i) * 8 * Math.sin(xx * 0.05 + i)), 1, 1);
+          g.fillStyle = dim; g.fillRect(x + 3, y + 24, CW - 6, 1);
+        } else if (kind === 2) {
+          for (let b = 0; b < 6; b++) { const hh = Math.round((0.3 + 0.7 * hash1(i + b * 9 + Math.floor(t * 2))) * 30); g.fillStyle = b === 3 ? dim : fg; g.fillRect(x + 6 + b * 9, y + 40 - hh, 6, hh); }
+        } else {
+          txt(g, "SYS " + String(i).padStart(2, "0"), x + 4, y + 4, fg); noiseLines(g, x + 4, y + 16, CW - 8, 26, dim, i, t);
+        }
+        g.fillStyle = "rgba(0,0,0,0.25)"; for (let yy = y; yy < y + CH; yy += 2) g.fillRect(x, yy, CW, 1);
+        g.restore();
+      }
+      s.tex.needsUpdate = true;
+    }
+    // ---- C: main screen
+    function drawMain(t) {
+      const s = SCR.main; if (!s) return; const g = s.g, w = s.w, h = s.h;
+      const red = t >= T.C1;
+      if (t >= T.GAP0 && t < T.C2) { g.fillStyle = "#000"; g.fillRect(0, 0, w, h); s.tex.needsUpdate = true; return; }
+      scanFill(g, w, h, red ? R_BG : G_BG, t);
+      const fg = red ? R_RED : G_GRN;
+      txt(g, red ? "!! СИСТЕМНЫЙ СБОЙ !!" : "СИСТЕМЫ: НОРМА", w / 2, 6, fg, 8, "center");
+      g.strokeStyle = fg; g.strokeRect(6.5, 18.5, w - 13, h - 30);
+      if (t < T.C2) {
+        const a = sung("столько@5.32", t), b = sung("проблем@5.54", t);
+        if (red) { txt(g, a.toUpperCase(), w / 2, 40, fg, 16, "center"); txt(g, b.toUpperCase(), w / 2, 62, fg, 16, "center"); }
+        else noiseLines(g, 12, 26, w - 24, h - 44, G_DIM, 99, t);
+      } else {
+        const a = sung("столько@7.04 проблем@7.30", t), b = sung("сейчас@7.80", t);
+        txt(g, a.toUpperCase(), w / 2, 30, fg, 8, "center"); txt(g, b.toUpperCase(), w / 2, 44, fg, 8, "center");
+        const c = sung("в@8.16 моей@8.42 бошке@8.60", t);
+        txt(g, c.toUpperCase(), w / 2, 62, fg, 16, "center");
+      }
+      txt(g, "ОШИБОК: " + (red ? String(Math.min(999, Math.floor((t - T.C1) * 140))).padStart(3, "0") : "000"), 8, h - 10, fg);
+      s.tex.needsUpdate = true;
+    }
+    // ---- CCTV feed: render secCam into rtCam, read back into a screen canvas with a green/grey treatment
+    function feed(sname, setup, t, label, tintc = [0.55, 1.0, 0.6], gain = 1.8) {
+      const s = SCR[sname]; if (!s) return;
+      setup();
+      secCam.layers.enable(1);
+      renderer.setRenderTarget(rtCam); renderer.setClearColor(0x000000, 1); renderer.render(scene, secCam);
+      renderer.readRenderTargetPixels(rtCam, 0, 0, FW, FH, camBuf);
+      const img = s.g.createImageData(FW, FH), d = img.data;
+      // linear target -> display gamma, then a cheap auto-exposure like a real CCTV camera
+      const lum = new Float32Array(FW * FH); let sum = 0;
+      for (let i = 0; i < FW * FH; i++) { const v = Math.pow((camBuf[i * 4] * 0.3 + camBuf[i * 4 + 1] * 0.55 + camBuf[i * 4 + 2] * 0.15) / 255, 0.45); lum[i] = v; sum += v; }
+      const ae = clamp(0.4 / Math.max(sum / (FW * FH), 0.02), 0.9, 3.2) * gain / 1.8;
+      for (let y = 0; y < FH; y++) for (let x = 0; x < FW; x++) {
+        const si = (FH - 1 - y) * FW + x, di = (y * FW + x) * 4;
+        let l = Math.pow(clamp(lum[si] * ae, 0, 1), 1.15) * (y % 2 ? 0.85 : 1) + (hash1(x * 13 + y * 71 + frameOf(t)) - 0.5) * 0.06;
+        d[di] = clamp(l * tintc[0], 0, 1) * 255; d[di + 1] = clamp(l * tintc[1], 0, 1) * 255; d[di + 2] = clamp(l * tintc[2], 0, 1) * 255; d[di + 3] = 255;
+      }
+      s.g.putImageData(img, 0, 0);
+      txt(s.g, label, 3, 3, "#e8ffe8");
+      if (Math.floor(t * 2) % 2) { s.g.fillStyle = "#ff3020"; s.g.fillRect(FW - 10, 4, 5, 5); }
+      txt(s.g, "05:00", FW - 4, FH - 11, "#e8ffe8", 8, "right");
+      s.tex.needsUpdate = true;
+    }
+    // ---- B: keypad
+    function drawKeypad(t) {
+      const s = SCR.keypad; if (!s) return; const g = s.g, w = s.w, h = s.h;
+      const denied = t >= 4.5;
+      scanFill(g, w, h, denied ? R_BG : "#0a0f08", t);
+      if (!denied) { txt(g, "ШЛЮЗ 3-А", w / 2, 8, G_GRN, 8, "center"); txt(g, "ВВОД КОДА", w / 2, 28, G_DIM, 8, "center"); txt(g, Math.floor(t * 3) % 2 ? "____" : "", w / 2, 44, G_GRN, 8, "center"); }
+      else if (Math.floor((t - 4.5) * 6) % 2 === 0 || t > 4.9) { txt(g, "ДОСТУП", w / 2, 16, R_RED, 8, "center"); txt(g, "ЗАПРЕЩЁН", w / 2, 32, R_RED, 8, "center"); }
+      s.tex.needsUpdate = true;
+    }
+    // ---- D: ring pedestal marquee
+    function drawRing(t) {
+      const s = SCR.ring; if (!s) return; const g = s.g, w = s.w, h = s.h;
+      const loop = t >= T.LOOP && t < T.SNAP;
+      scanFill(g, w, h, loop ? R_BG : "#120a02", t);
+      const fg = loop ? R_RED : "#ffb040";
+      txt(g, "КОЛЬЦО 2", 4, 4, fg);
+      const cyc = String(Math.floor(ringAngle(t) / (Math.PI * 2) * 12) + 4993).padStart(4, "0");
+      txt(g, "ЦИКЛ " + (loop ? "????" : cyc), 4, 16, fg);
+      g.fillStyle = fg; g.fillRect(4, 27, w - 8, 1);
+      const a = sung("и@9.22 я@9.48 не@9.52 знаю@9.74", t), b = sung("как@10.26 мне@10.42 выйти@10.66", t), c = sung("с@11.10 этого@11.18 круга@11.64", t);
+      txt(g, a, 4, 34, fg); txt(g, b, 4, 48, fg); txt(g, c, 4, 62, fg);
+      if (loop) for (let k = 0; k < 6; k++) txt(g, "круга круга круга", 4 - ((frameOf(t) * 3 + k * 37) % 60), 4 + k * 14, "#ff6a40");
+      s.tex.needsUpdate = true;
+    }
+    // ---- E: chronometer, 7-segment
+    const SEG = { 0: "1111110", 1: "0110000", 2: "1101101", 3: "1111001", 4: "0110011", 5: "1011011", 6: "1011111", 7: "1110000", 8: "1111111", 9: "1111011" };
+    function seg7(g, d, x, y, sw, sh, th, on, off) {
+      const s = SEG[d];
+      const bars = [[x + th, y, sw - 2 * th, th], [x + sw - th, y + th, th, sh / 2 - th], [x + sw - th, y + sh / 2, th, sh / 2 - th], [x + th, y + sh - th, sw - 2 * th, th], [x, y + sh / 2, th, sh / 2 - th], [x, y + th, th, sh / 2 - th], [x + th, y + sh / 2 - th / 2, sw - 2 * th, th]];
+      bars.forEach((b, i) => { g.fillStyle = s[i] === "1" ? on : off; g.fillRect(...b.map(Math.round)); });
+    }
+    function clockTime(t) {
+      // 04:59:57 at the start of the shot, 05:00:00 exactly on «пять»
+      const secs = 4 * 3600 + 59 * 60 + 60 + (t - T.PYAT);
+      return Math.floor(secs);
+    }
+    function drawClock(t) {
+      const s = SCR.clock; if (!s) return; const g = s.g, w = s.w, h = s.h;
+      const lightsOut = t >= T.OFF && t < T.ON;
+      g.fillStyle = "#0c0101"; g.fillRect(0, 0, w, h);
+      if (lightsOut) { s.tex.needsUpdate = true; return; }
+      const secs = clockTime(t), hh = Math.floor(secs / 3600), mm = Math.floor(secs / 60) % 60, ss = secs % 60;
+      const ds = String(hh).padStart(2, "0") + String(mm).padStart(2, "0");
+      const on = t >= T.PYAT ? "#ff3020" : "#ff7a30", off = "#2a0604";
+      const flash = t >= T.PYAT && t < T.PYAT + 0.6 && Math.floor((t - T.PYAT) * 8) % 2;
+      for (let i = 0; i < 4; i++) seg7(g, ds[i], 14 + i * 40 + (i > 1 ? 14 : 0), 10, 30, 52, 6, flash ? off : on, off);
+      g.fillStyle = Math.floor(t * 2) % 2 || t >= T.PYAT ? on : off; g.fillRect(96, 24, 6, 6); g.fillRect(96, 44, 6, 6);
+      txt(g, String(ss).padStart(2, "0"), w - 6, h - 12, on, 8, "right");
+      txt(g, "БОРТ", 6, h - 10, "#7a1a10");
+      s.tex.needsUpdate = true;
+    }
+    // ---- G/H: vitals monitor (same numbers as the terminal in scene A)
+    function drawVitals(t) {
+      const s = SCR.vitals; if (!s) return; const g = s.g, w = s.w, h = s.h;
+      const red = t >= T.RED;
+      scanFill(g, w, h, red ? R_BG : "#020a0c", t);
+      const fg = red ? R_RED : "#8af0ff", dim = red ? "#7a140a" : "#2a6a78";
+      txt(g, "ПАЦИЕНТ: UNIT 1", 4, 4, fg);
+      g.fillStyle = dim; g.fillRect(4, 14, w - 8, 1);
+      // ECG
+      const bpm = t >= T.EYES ? 140 : 41;
+      for (let x = 0; x < w - 8; x++) {
+        const ph = ((x / 30) + t * bpm / 60) % 1;
+        const v = ph < 0.05 ? -ph * 160 : ph < 0.08 ? (ph - 0.05) * 400 - 8 : ph < 0.1 ? 4 - (ph - 0.08) * 200 : Math.sin(ph * 12) * 0.6;
+        g.fillStyle = "#5dff7a"; g.fillRect(4 + x, 34 + Math.round(v), 1, 1);
+      }
+      const vals = [["ЧСС", t >= T.EYES ? "140" : "041"], ["ЭЭГ θ", "6.2"], ["СОН", t >= T.EYES ? "00%" : "97%"]];
+      vals.forEach(([k, v], i) => { txt(g, k, 4, 52 + i * 14, dim); txt(g, v, w - 4, 52 + i * 14, i === 2 ? "#ffffff" : fg, 8, "right"); });
+      // the recognisable bit: highlight the matching numbers
+      if (t > 20.9 && t < T.H1 && Math.floor(t * 3) % 2) { g.strokeStyle = "#ffffff"; g.strokeRect(w - 40.5, 49.5, 37, 40); }
+      s.tex.needsUpdate = true;
+    }
+    function drawCapCtl(t) {
+      const s = SCR.cap_ctl; if (!s) return; const g = s.g, w = s.w, h = s.h;
+      const red = t >= T.RED;
+      scanFill(g, w, h, red ? R_BG : "#020a0c", t);
+      txt(g, "UNIT 1", 4, 4, red ? R_RED : "#8af0ff");
+      txt(g, red ? "ПРОБУЖДЕНИЕ" : "СТАЗИС", 4, 20, red ? R_RED : "#5dff7a");
+      txt(g, "DAY 9999", 4, 36, "#2a6a78");
+      s.tex.needsUpdate = true;
+    }
+    function drawStars(t) {
+      const s = SCR.stars; if (!s) return; const g = s.g;
+      g.fillStyle = "#01020a"; g.fillRect(0, 0, 48, 48);
+      const rnd = mulberry32(7);
+      for (let i = 0; i < 40; i++) { const x = rnd() * 48, y = rnd() * 48; g.fillStyle = rnd() < 0.2 ? "#ffffff" : "#6a7090"; g.fillRect(Math.floor((x + t * 0.6) % 48), Math.floor(y), 1, 1); }
+      s.tex.needsUpdate = true;
+    }
+    function drawPhoneLk(t) {
+      const s = SCR.phone_lk; if (!s) return; const g = s.g;
+      g.fillStyle = "#0e1621"; g.fillRect(0, 0, 32, 64);
+      g.fillStyle = "#2b5278"; g.fillRect(2, 20, 28, 12);
+      g.fillStyle = "#5fa8e8"; g.fillRect(4, 23, 6, 6);
+      g.fillStyle = "#c8d8e8"; g.fillRect(12, 24, 14, 1); g.fillRect(12, 27, 10, 1);
+      tinyDigits(g, "05:00", 7, 4, "#c8d8e8");
+      s.tex.needsUpdate = true;
+    }
+    const DIG = { 0: "111101101101111", 1: "010110010010111", 2: "111001111100111", 3: "111001111001111", 4: "101101111001001", 5: "111100111001111", 6: "111100111101111", 7: "111001001001001", 8: "111101111101111", 9: "111101111001111", ":": "000010000010000" };
+    function tinyDigits(g, s, x, y, c) { g.fillStyle = c; for (const ch of s) { const p = DIG[ch]; if (!p) { x += 2; continue; } for (let i = 0; i < 15; i++) if (p[i] === "1") g.fillRect(x + (i % 3), y + Math.floor(i / 3), 1, 1); x += ch === ":" ? 3 : 4; } }
+
+    // ---- F: the phone. A Telegram-style channel (pixel version), no names: the title is a smudge
+    const PHOTOS = [];
+    function buildPhotos() {
+      // "photos" posted to the channel: real renders of the ship's rooms, taken once at build time
+      const shots = [["corr", B(0.0, 4.6, 1.6), B(0, 7, 1.5)], ["ctrl", B(0, -1.0, 1.7), B(0, 2.3, 1.5)], ["ring", B(0, -2.6, 1.8), B(0, 0.6, 2.0)], ["med", B(-1.2, -0.8, 1.9), B(0.4, 1.7, 0.7)]];
+      const keep = {}; for (const k in R) keep[k] = R[k].root.visible;
+      for (const [room, p, l] of shots) {
+        show(room);
+        if (room === "corr") lights(R.corr, { c1: 1, c2: 1, far: 0.6 });
+        if (room === "ctrl") { lights(R.ctrl, { k1: 1, k2: 1, mainscr: 1, fill: 1 }); drawAtlas(0, "ctrl"); drawMain(0); }
+        if (room === "ring") lights(R.ring, { r1: 1, r2: 1, r3: 1, ringglow: 1 });
+        if (room === "med") { lights(R.med, { m1: 1, m2: 1, m3: 1, cap_in: 1, fill: 1 }); S.patient.visible = true; }
+        secCam.position.copy(p); secCam.lookAt(l); secCam.fov = 60; secCam.updateProjectionMatrix();
+        renderer.setRenderTarget(rtCam); renderer.setClearColor(0x000000, 1); renderer.render(scene, secCam);
+        renderer.readRenderTargetPixels(rtCam, 0, 0, FW, FH, camBuf);
+        const [c, g] = cnv(FW, FH); const img = g.createImageData(FW, FH);
+        for (let y = 0; y < FH; y++) for (let x = 0; x < FW; x++) { const si = ((FH - 1 - y) * FW + x) * 4, di = (y * FW + x) * 4; for (let k = 0; k < 3; k++) img.data[di + k] = clamp(Math.pow(camBuf[si + k] / 255, 0.6) * 255 * 1.2, 0, 255); img.data[di + 3] = 255; }
+        g.putImageData(img, 0, 0);
+        PHOTOS.push(c);
+        S.patient.visible = false;
+      }
+      for (const k in R) R[k].root.visible = keep[k];
+    }
+    function drawPhone(t) {
+      const s = SCR.phone; if (!s) return; const g = s.g, w = s.w, h = s.h;
+      const BG = "#0e1621", BAR = "#17212b", BUB = "#182533", ACC = "#5fa8e8", TXT = "#d8e2ec", DIMT = "#6d7f8f";
+      g.fillStyle = BG; g.fillRect(0, 0, w, h);
+      // feed
+      const posts = 9;
+      const ph = 78;
+      const scroll = env([[T.F1, 0], [16.2, 0], [17.2, ph * 3.2], [17.6, ph * 3.4], [18.4, ph * 6.2], [18.9, ph * 7.0]], t);
+      for (let i = 0; i < posts; i++) {
+        const y = 30 + i * ph - scroll + 8;
+        if (y > h || y + ph < 20) continue;
+        g.fillStyle = BUB; g.fillRect(6, y, w - 18, ph - 8);
+        const live = i === posts - 1;
+        if (live && t > 18.3) {
+          // live stream of this very room
+          const c = SCR.__live; if (c) g.drawImage(c, 8, y + 2, w - 22, 50);
+          g.fillStyle = "#e0302a"; g.fillRect(10, y + 4, 22, 9); txt(g, "LIVE", 11, y + 5, "#ffffff", 8);
+        } else {
+          const p = PHOTOS[i % PHOTOS.length];
+          if (p) g.drawImage(p, 8, y + 2, w - 22, 50);
+        }
+        // caption: the same time on every post
+        tinyDigits(g, "05:00", w - 34, y + ph - 18, DIMT);
+        g.fillStyle = DIMT; g.fillRect(12, y + ph - 17, 3, 3); g.fillRect(16, y + ph - 16, 1, 1);
+        tinyDigits(g, "1", 19, y + ph - 18, DIMT);
+      }
+      // header (title deliberately unreadable — a smudged bar, never a real name)
+      g.fillStyle = BAR; g.fillRect(0, 0, w, 30);
+      tinyDigits(g, "05:00", 4, 2, TXT); g.fillStyle = TXT; g.fillRect(w - 14, 2, 10, 5); g.fillStyle = BAR; g.fillRect(w - 13, 3, 3, 3);
+      g.fillStyle = ACC; g.fillRect(4, 15, 2, 7); g.fillRect(3, 18, 4, 1);
+      g.fillStyle = "#3a6a9a"; g.beginPath(); g.arc(19, 19, 7, 0, Math.PI * 2); g.fill();
+      g.fillStyle = "#1a3a5a"; g.fillRect(16, 16, 6, 6);
+      const rnd = mulberry32(42);
+      for (let x = 0; x < 52; x++) { g.fillStyle = rnd() < 0.5 ? "#7a8a9a" : "#4a5a6a"; g.fillRect(30 + x, 13 + Math.floor(rnd() * 2), 1, 4); }
+      g.fillStyle = DIMT; g.fillRect(30, 21, 30, 2);
+      // input bar: the line is typed here, unsent
+      // input bar grows with the typed line (16 px letters so it reads at phone size)
+      const typed = sung("звонка@17.30 от@18.04 тя@18.34 жду@18.68", t);
+      const lines = []; if (typed) { for (const wd of typed.split(" ")) { const last = lines[lines.length - 1]; if (last !== undefined && (last + " " + wd).length <= 5) lines[lines.length - 1] = last + " " + wd; else lines.push(wd); } }
+      const ih = typed ? 12 + lines.length * 20 : 34;
+      g.fillStyle = BAR; g.fillRect(0, h - ih, w, ih);
+      if (!typed) txt(g, "Комментарий", 6, h - 22, DIMT);
+      else {
+        const cur = Math.floor(t * 4) % 2 ? "_" : "";
+        lines.forEach((l, i) => txt(g, l + (i === lines.length - 1 ? cur : ""), 4, h - ih + 6 + i * 20, TXT, 16));
+      }
+      g.fillStyle = ACC; g.beginPath(); g.moveTo(w - 10, h - 20); g.lineTo(w - 3, h - 15); g.lineTo(w - 10, h - 10); g.fill();
+      // glitch at the end: the feed repeats itself, then the screen sticks
+      if (t > 18.95) { const k = Math.floor(t * 30) % 3; g.drawImage(s.c, 0, 30 + k * 4, w, 80, 0, 60, w, 80); }
+      s.tex.needsUpdate = true;
+    }
+
+    // =====================================================================
+    // shot list
+    // =====================================================================
+    const CAM = {
+      A: [[0, 2.36, -0.62, 1.28, 90, -3], [1.0, 2.4, -0.6, 1.29, 91, -3], [1.85, 2.44, -0.6, 1.3, 92, -3], [2.35, 1.75, -0.5, 1.5, 104, -5], [3.0, 1.2, -0.95, 1.62, 198, -1]],
+      B: [[T.B1, 0.15, 1.6, 1.62, 2, 0], [3.7, 0.1, 3.4, 1.62, -1, 0], [4.45, 0.0, 5.55, 1.61, 0, -1], [4.62, -0.02, 6.25, 1.6, 0, -2], [5.32, -0.02, 6.52, 1.56, -1, -4]],
+      C1: [[T.C1, 0.0, -1.25, 1.62, 0, 4], [T.C2, 0.0, -0.75, 1.62, 3, 3]],
+      D: [[T.D1, 0.0, -3.6, 1.62, 0, 10], [10.3, 0.0, -2.8, 1.64, 1, 12], [11.1, 0.0, -1.9, 1.75, 0, 8], [T.LOOP, 0.0, -1.3, 1.9, 0, 4], [12.12, 0.0, -1.1, 1.95, 0, 3]],
+      E1: [[T.E1, 0.3, -0.5, 1.6, 0, 2], [T.PYAT, 0.3, 0.85, 1.68, 0, 3], [T.OFF, 0.3, 1.05, 1.69, 0, 3]],
+      E2: [[T.ON, 0.3, 0.2, 1.62, 6, -2], [14.75, 0.45, 0.0, 1.62, 60, -6], [15.15, 1.1, -0.35, 1.6, 88, -10], [T.F1, 1.45, -0.45, 1.6, 90, -14]],
+      F: [[T.F1, 1.5, -0.45, 1.6, 90, -18], [17.0, 1.52, -0.47, 1.6, 92, -20], [T.G1, 1.55, -0.5, 1.58, 94, -22]],
+      G: [[T.G1, 0.3, -2.55, 1.62, 2, 0], [20.4, 0.55, -1.4, 1.6, 12, -2], [21.6, 0.95, -0.45, 1.56, 38, -4], [22.74, 0.95, 0.15, 1.5, 0, -20]],
+      H: [[T.H1, 0.95, 0.15, 1.5, 0, -20], [23.3, 0.25, 0.7, 1.52, 25, -28], [23.8, -0.05, 1.05, 1.52, -27, 6], [T.VOT, -0.08, 1.08, 1.52, -28, 7], [24.75, -0.2, 1.7, 1.5, 90, -32], [26.1, 0.32, 1.7, 1.3, 90, -38]],
+    };
+    CAM.A = CAM.A.filter(Boolean);
+    function shotId(t) { const o = [["A", 0], ["B", T.B1], ["C1", T.C1], ["C2", T.C2], ["D", T.D1], ["E1", T.E1], ["E2", T.ON], ["F", T.F1], ["G", T.G1], ["H", T.H1]]; let id = "A"; for (const [k, s] of o) if (t >= s) id = k; return id; }
+
+    function camC2(t) {
+      // turn to the CCTV monitor on the east wall, whip round on «бошке», whip back
+      const sp = new THREE.Vector3(), sn = new THREE.Vector3(0, 0, 1);
+      S.secScreen.getWorldPosition(sp);
+      sn.applyQuaternion(S.secScreen.getWorldQuaternion(new THREE.Quaternion()));
+      // Blender coords of the viewing spot in front of the screen
+      const front = sp.clone().addScaledVector(sn, 1.15);
+      S.c2x = front.x; S.c2y = -front.z;
+      const bx = front.x, by = -front.z;
+      const keys = [[T.C2, 0.0, -0.75, 1.62, 3, 3], [7.45, 0.6, -0.1, 1.62, 60, 1], [7.85, bx, by, 1.6, 90, -2], [T.WHIP, bx + 0.05, by, 1.6, 90, -3]];
+      let p = path(keys, Math.min(t, T.WHIP));
+      if (t >= T.WHIP) {
+        const u1 = smooth(ramp(t, T.WHIP, T.WHIP + 0.2)), u2 = smooth(ramp(t, T.WHIP2, T.WHIP2 + 0.2));
+        p = [bx + 0.05 - 0.15 * u1 + 0.15 * u2, by, 1.6, 90 + 160 * u1 - 160 * u2, -3 + 2 * u1 - 2 * u2];
+      }
+      return p;
+    }
+    function ringAngle(t) {
+      // a stepped, mechanical rotation: one jolt per beat (0.418 s), with a small overshoot
+      const beat = 0.418, t0 = 9.22;
+      if (t < t0) return 0;
+      const n = Math.floor((t - t0) / beat), u = ((t - t0) % beat) / beat;
+      const step = Math.PI / 6;
+      const e = u < 0.35 ? 1 - Math.pow(1 - u / 0.35, 3) : 1 + 0.06 * Math.sin((u - 0.35) * 14) * Math.exp(-(u - 0.35) * 8);
+      return (n + Math.min(1.06, e)) * step;
+    }
+
+    // =====================================================================
+    // per-shot world state
+    // =====================================================================
+    const tmpV = new THREE.Vector3();
+    const GRADES = {
+      green: ["#062a10", "#38d860", "#dcffd4", 0.9],
+      amber: ["#2a1606", "#c0782a", "#ffe6b4", 0.55],
+      red: ["#3a0604", "#e8301c", "#ffd6c8", 0.92],
+      orange: ["#3a1204", "#e8681a", "#ffe08a", 0.8],
+      warm: ["#2a0e08", "#c8502a", "#ffd8a8", 0.7],
+      phone: ["#0a1220", "#4a78a8", "#e8f0ff", 0.25],
+      white: ["#141c1e", "#9ab6b8", "#f4fffc", 0.62],
+    };
+    function setGrade(a, b = null, u = 0) {
+      const A = GRADES[a], Bg = b ? GRADES[b] : A;
+      post.uniforms.c1.value.set(A[0]).lerp(new THREE.Color(Bg[0]), u);
+      post.uniforms.c2.value.set(A[1]).lerp(new THREE.Color(Bg[1]), u);
+      post.uniforms.c3.value.set(A[2]).lerp(new THREE.Color(Bg[2]), u);
+      post.uniforms.uMono.value = lerp(A[3], Bg[3], u);
+    }
+    function placeCam(p, cam = camera, roll = 0) {
+      const [x, y, z, yaw, pitch] = p;
+      cam.position.copy(B(x, y, z));
+      const dir = B(Math.sin(yaw * DEG) * Math.cos(pitch * DEG), Math.cos(yaw * DEG) * Math.cos(pitch * DEG), Math.sin(pitch * DEG));
+      cam.up.set(Math.sin(roll), Math.cos(roll), 0);
+      cam.lookAt(tmpV.copy(cam.position).add(dir));
+      if (roll) cam.rotateZ(roll);
+    }
+    function bob(t, speed, amt = 1) {
+      // head bob from walking: 2 steps per 0.84 s (the beat)
+      const ph = t * Math.PI * 2 / 0.836;
+      return [Math.sin(ph) * 0.012 * speed * amt, Math.abs(Math.sin(ph)) * 0.03 * speed * amt];
+    }
+    function shake(t, amp, seed = 1) { return [(hash1(frameOf(t) * 1.3 + seed) - 0.5) * amp, (hash1(frameOf(t) * 2.7 + seed) - 0.5) * amp]; }
+
+    function drawWorld(t, target) {
+      const f = frameOf(t), id = shotId(t);
+      S.fig.visible = S.figSec.visible = S.hero.visible = S.patient.visible = S.hand.visible = false;
+      camera.fov = 64; camera.near = 0.03;
+      WARP.value = 0;
+      let lid = 0, fade = 1, bloom = 0.9, expo = 1.0, grain = 0.035, tear = 0, roll = 0;
+      let p;
+      if (id === "A") {
+        show("med");
+        p = path(CAM.A, t);
+        const b = bob(t, t > T.A2 ? 0.6 : 0);
+        p[2] += b[1] - 0.015; p[0] += b[0];
+        lights(R.med, { term: 1.7 + 0.1 * Math.sin(t * 40), exitsign: 1.6 });
+        emitScale(R.med, (n) => (n === "EMIT_tube" ? 0.08 : n === "EMIT_red" ? 0.15 : 1));
+        drawDiag(t); drawAtlas(t, "med"); drawVitals(0); drawCapCtl(0);
+        setGrade("green");
+        lid = 1 - smooth(ramp(t, 0.0, 0.55)) * 1; lid = Math.max(0, lid);
+        fade = smooth(ramp(t, 0.0, 0.35));
+        expo = 1.35;
+      } else if (id === "B") {
+        show("corr");
+        p = path(CAM.B, t);
+        const walk = 1 - smooth(ramp(t, 4.4, 4.65));
+        const b = bob(t, walk); p[0] += b[0]; p[2] += b[1];
+        // the door rattles when he tries it
+        const tryT = ramp(t, 4.32, 4.62);
+        if (tryT > 0 && tryT < 1) { const sh = shake(t, 0.035); p[0] += sh[0]; p[2] += sh[1]; S.door.rotation.y = Math.sin(t * 70) * 0.012 * (1 - tryT); } else S.door.rotation.y = 0;
+        const denied = t >= 4.5;
+        const flick = t > 5.02 && t < 5.2 ? (f % 2 ? 0.05 : 1.3) : 1;
+        lights(R.corr, { c1: [denied ? 0.6 : 1.5], c2: [denied ? 0.7 : 1.5], alarm: denied ? (1.0 + 1.0 * (Math.floor(t * 5) % 2)) * flick : 0.15, far: t > 5.04 && t < 5.18 ? 0 : 1.0 });
+        emitScale(R.corr, (n) => (n === "EMIT_red" ? (denied ? 1 : 0.1) : 1));
+        drawKeypad(t);
+        // the figure behind the glass: appears, then is gone when the light blinks
+        if (t >= 4.74 && t < 5.1) { S.fig.visible = true; S.fig.position.copy(B(0.55, 10.2, 0)); S.fig.rotation.set(0, -0.25, 0); }
+        setGrade("amber", "red", smooth(ramp(t, 4.5, 4.75)) * 0.75);
+        expo = 1.45;
+      } else if (id === "C1" || id === "C2") {
+        show("ctrl");
+        const alarm = t >= T.C2;
+        if (id === "C1") { p = path(CAM.C1, t); } else p = camC2(t);
+        const quiet = t >= T.GAP0 && t < T.C2;
+        // beacons switch on one by one on 7.04 / 7.36 / 7.59 and keep pulsing
+        const on = [7.04, 7.04, 7.36, 7.36, 7.59, 7.59];
+        const Lmap = { k1: alarm ? 0.25 : quiet ? 0.1 : 1.3, k2: alarm ? 0.25 : quiet ? 0.1 : 1.3, mainscr: quiet ? 0.05 : 1.4, fill: alarm ? 0.6 : 1.3 };
+        S.bcn.forEach((b, i) => {
+          const lit = t >= on[i];
+          const pulse = lit ? 0.55 + 0.45 * Math.max(0, Math.sin((t - on[i]) * 9 + i)) : 0;
+          Lmap["bcn" + i] = pulse * 2.2;
+          if (b) { b.material.color.copy(b.material.userData.base).multiplyScalar(lit ? 0.4 + pulse * 1.6 : 0.12); b.rotation.y = lit ? (t - on[i]) * 9 : 0; }
+        });
+        lights(R.ctrl, Lmap);
+        drawAtlas(t, "ctrl"); drawMain(t);
+        // CCTV: hero at the console, someone standing behind him (until «бошке»)
+        const hp = camera.position;
+        feed("sec", () => {
+          const cp = R.ctrl.dyn.CAM_sec.getWorldPosition(new THREE.Vector3());
+          secCam.position.copy(cp); secCam.fov = 36; secCam.updateProjectionMatrix();
+          const hx = S.c2x ?? 1.1, hy = S.c2y ?? 0.75, fx = hx - 0.8, fy = hy + 0.15;
+          const heroAt = B(hx, hy, 0);
+          lights(R.ctrl, { k1: 1.4, k2: 1.4, fill: 1.6, mainscr: 1.2 });
+          secCam.lookAt(B((hx + fx) / 2, (hy + fy) / 2, 1.2));
+          S.hero.visible = true; S.hero.position.copy(heroAt); S.hero.rotation.set(0, Math.PI / 2, 0);
+          // someone stands right behind him, facing his back — only the camera sees it
+          S.figSec.visible = t < T.WHIP; S.figSec.position.copy(B(fx, fy, 0)); S.figSec.rotation.set(0, Math.PI / 2, 0);
+        }, t, "CAM 4");
+        S.hero.visible = false; S.figSec.visible = false;
+        lights(R.ctrl, Lmap);
+        setGrade(alarm ? "red" : "green", null, 0);
+        if (t >= T.C1 && t < T.GAP0) { setGrade("green"); post.uniforms.uMono.value = 0.6; }
+        expo = 1.35;
+        if (alarm) { const k = 0.85 + 0.15 * Math.sin(t * 9); expo = 1.45 * k; }
+        if (quiet) { expo = 0.8; grain = 0.05; }
+        if (t >= T.WHIP && t < T.WHIP + 0.22) { tear = 1; }
+        bloom = 1.15;
+      } else if (id === "D") {
+        show("ring");
+        p = path(CAM.D, t);
+        const walk = 1 - smooth(ramp(t, 10.9, 11.3));
+        const b = bob(t, walk * 0.8); p[0] += b[0]; p[2] += b[1];
+        const a = ringAngle(t);
+        const loopU = t >= T.LOOP && t < T.SNAP ? smooth(ramp(t, T.LOOP, T.LOOP + 0.25)) : 0;
+        S.ring.rotation.set(0, 0, 0); S.ring.rotateOnAxis(new THREE.Vector3(0, 0, 1), -a);
+        const jolt = ((t - 9.22) % 0.418) / 0.418;
+        if (t > 9.22) { const k = Math.exp(-jolt * 10) * 0.012; p[2] += k; p[0] += k * 0.4 * Math.sin(t * 50); }
+        const vis = loopU > 0;
+        [S.ringB, S.ringC, S.ringD].forEach((r, i) => { r.visible = vis; r.scale.setScalar(vis ? lerp(0.2, 1, loopU) : 1); });
+        if (vis) {
+          const tt = t - T.LOOP;
+          S.ringB.rotation.set(tt * 4.0, 0, tt * 1.2); S.ringC.rotation.set(0, tt * 5.5, tt * 3.0); S.ringD.rotation.set(tt * 0.8, tt * 0.6, -tt * 2.0);
+          S.ring.rotateOnAxis(new THREE.Vector3(1, 0, 0), tt * 2.5);
+        }
+        S.flesh.forEach((fl, i) => { fl.visible = vis; const g = smooth(ramp(t, T.LOOP + i * 0.012, T.LOOP + 0.25 + i * 0.01)); fl.scale.copy(fl.userData.s0).multiplyScalar(0.05 + 0.95 * g * (1 + 0.08 * Math.sin(t * 7 + i))); });
+        WARP.value = loopU * 0.9; WTIME.value = t;
+        // a glimpse of the figure inside the ring when the loop breaks
+        if (t >= 11.8 && t < 11.93) { S.fig.visible = true; S.fig.position.copy(B(0, 1.2, 0.0)); S.fig.rotation.set(0, 0, 0); }
+        const lm = { r1: 1.8, r2: 1.8, r3: 1.4, ringglow: 0.9 + 0.5 * Math.exp(-jolt * 6) };
+        if (vis) { lm.r1 = [3.0, "#ff2a10"]; lm.r2 = [3.0, "#ff5010"]; lm.r3 = [2.5, "#ff2010"]; lm.ringglow = [3.0, "#ff3010"]; }
+        lights(R.ring, lm);
+        drawRing(t);
+        setGrade("orange", "red", loopU);
+        expo = 1.35;
+        if (vis) { const z = smooth(ramp(t, T.LOOP, T.SNAP)); camera.fov = 64 + 34 * z; roll = Math.sin((t - T.LOOP) * 6) * 0.12 * z; p[1] -= z * 0.9; bloom = 1.4; grain = 0.06; }
+        if (t >= T.SNAP) { expo = 1.35; }
+        if (t >= T.BLK) fade = 0;
+        if (t >= T.LOOP - 0.06 && t < T.LOOP + 0.05) tear = 1;
+      } else if (id === "E1" || id === "E2") {
+        show("quarters");
+        const after = id === "E2";
+        p = after ? path(CAM.E2, t) : path(CAM.E1, t);
+        const walk = after ? smooth(ramp(t, 14.6, 14.9)) * (1 - smooth(ramp(t, 15.3, 15.44))) : 1 - smooth(ramp(t, 12.9, T.PYAT));
+        const b = bob(t, walk * 0.8); p[0] += b[0]; p[2] += b[1];
+        // what changed during the blackout
+        const ch = after;
+        S.chairA.position.copy(S.chairA.userData.p0); S.chairA.rotation.copy(S.chairA.userData.r0);
+        S.chairB.position.copy(S.chairB.userData.p0); S.chairB.rotation.copy(S.chairB.userData.r0);
+        S.items.position.copy(S.items.userData.p0); S.items.rotation.copy(S.items.userData.r0);
+        if (ch) {
+          S.chairA.position.copy(B(1.4, -1.2, 0)); S.chairA.rotation.set(0, 2.6, 0);
+          S.chairB.position.copy(B(-0.6, 1.6, 0)); S.chairB.rotation.set(Math.PI / 2, 0.4, 0); S.chairB.position.y = 0.25;
+          S.items.position.copy(B(0.3, 0.0, 0.0)); S.items.rotation.set(0, 2.0, 0);
+        }
+        if (S.lk) S.lk.rotation.y = S.lk.userData.ry0 - (ch ? 1.6 : 0);
+        R.quarters.dyn.DYN_phone_lk.visible = true;
+        drawClock(t); drawStars(t); drawPhoneLk(t);
+        const out = t >= T.OFF && t < T.ON;
+        S.ind.forEach((o, i) => { const lit = t >= T.PYAT - 0.6 + (i % 6) * 0.1 || (Math.floor(t * 3 + i) % 2 === 0); o.material.color.copy(o.material.userData.base).multiplyScalar(out ? 0 : lit ? 1.2 : 0.15); });
+        lights(R.quarters, out ? {} : after ? { pend: [1.6, "#ff3a20"], clock: 1.5, phone: 2.2 + 0.4 * Math.sin(t * 6), fill: 1.1 } : { pend: 1.3, clock: t >= T.PYAT ? 1.5 : 0.8, q1: 1.0, fill: 1.2 });
+        expo = 1.3;
+        emitScale(R.quarters, (n) => (out ? 0 : n === "EMIT_tube" && after ? 0.05 : 1));
+        if (out) fade = 0;
+        setGrade("warm", "red", after ? 0.45 : smooth(ramp(t, T.PYAT, T.PYAT + 0.5)) * 0.35);
+        if (t >= T.PYAT && t < T.PYAT + 0.12) tear = 1;
+      } else if (id === "F") {
+        show("quarters");
+        p = path(CAM.F, t);
+        const b = bob(t, 0.15); p[0] += b[0]; p[2] += b[1];
+        if (S.lk) S.lk.rotation.y = S.lk.userData.ry0 - 1.6;
+        S.chairA.position.copy(B(1.4, -1.2, 0)); S.chairA.rotation.set(0, 2.6, 0);
+        R.quarters.dyn.DYN_phone_lk.visible = false;
+        S.hand.visible = true;
+        const lift = smooth(ramp(t, T.F1, T.F1 + 0.45));
+        const sw = Math.sin(t * 1.3) * 0.004;
+        S.hand.position.set(0.0 + sw, lerp(-0.3, 0.012, lift), -0.2);
+        S.hand.rotation.set(lerp(-0.9, 0.05, lift), 0.06, 0.03);
+        // the live post shows this room from the ceiling corner: him, holding the phone
+        if (t > 18.25) liveFeed(t);
+        drawPhone(t);
+        lights(R.quarters, { pend: [1.2, "#ff3a20"], clock: 1.0, phone: 0, fill: 0.8 });
+        S.handLight.intensity = 0.0;
+        expo = 1.25;
+        setGrade("phone", "warm", 0.25);
+        camera.near = 0.02;
+        if (t > 18.95) tear = 1;
+      } else if (id === "G" || id === "H") {
+        show("med");
+        const H = id === "H";
+        p = H ? path(CAM.H, t) : path(CAM.G, t);
+        const b = bob(t, H ? 0.25 : 0.55, 0.8); p[0] += b[0]; p[2] += b[1];
+        S.patient.visible = true;
+        const red = t >= T.RED;
+        S.faceLie.material.map = t >= T.EYES ? S.faceOpenTex : S.faceClosedTex;
+        lights(R.med, red ? { red1: 1.6, red2: 1.6, red3: 1.6, cap_in: [0.6, "#ff2010"] } : { m1: 0.9, m2: 0.9, m3: 1.0, cap_in: 1.0, fill: 0.8, term: 0.3 });
+        emitScale(R.med, (n) => (red ? (n === "EMIT_red" ? 1.4 : n === "EMIT_tube" ? 0.05 : 0.6) : n === "EMIT_red" ? 0.15 : 1));
+        drawDiag(t); drawAtlas(t, "med"); drawVitals(t); drawCapCtl(t);
+        // CCTV of this room: the man who walked the ship is standing at the capsule
+        feed("secmed", () => {
+          const cp = R.med.dyn.CAM_secmed.getWorldPosition(new THREE.Vector3());
+          secCam.position.copy(cp); secCam.fov = 70; secCam.updateProjectionMatrix();
+          secCam.lookAt(B(0.4, 1.3, 0.9));
+          S.hero.visible = t < 24.9; S.hero.position.copy(B(-0.08, 1.0, 0)); S.hero.rotation.set(0, (180 + 27) * DEG, 0);
+        }, t, "CAM 2", red ? [1.0, 0.25, 0.2] : [0.7, 1.0, 0.95]);
+        S.hero.visible = false;
+        setGrade("white", "red", red ? 1 : 0);
+        // eyelids getting heavy
+        lid = H ? 0 : Math.max(env([[19.5, 0], [19.75, 0.75], [20.0, 0.1], [20.35, 0], [20.6, 0.92], [20.95, 0.15], [21.6, 0.05], [21.85, 0.7], [22.1, 0.1], [22.35, 0.0], [22.5, 0.6], [22.7, 0]], t), 0);
+        if (H && t > 24.9 && t < 25.35) lid = 0.25 * Math.sin((t - 24.9) / 0.45 * Math.PI);
+        if (G_FADE_IN(t)) fade = smooth(ramp(t, T.G1, T.G1 + 0.3));
+        expo = 1.15;
+        if (red) { expo = 1.35; bloom = 1.3; }
+        if (t >= T.EYES && t < T.EYES + 0.08) tear = 1;
+        if (t >= T.END) fade = 0;
+      }
+      placeCam(p, camera, roll);
+      camera.updateProjectionMatrix();
+      post.uniforms.uLid.value = lid; post.uniforms.uFade.value = fade; post.uniforms.uBloom.value = bloom; post.uniforms.uExpo.value = expo; post.uniforms.uGrain.value = grain;
+      post.uniforms.uTear.value = tear; post.uniforms.uTearY.value = 0.2 + 0.6 * hash1(Math.floor(f / 2) * 1.7);
+      post.uniforms.uFrame.value = f % 977;
+      camera.layers.set(0);
+      renderer.setRenderTarget(target); renderer.setClearColor(0x000000, 1); renderer.render(scene, camera);
+    }
+    const G_FADE_IN = (t) => t < T.G1 + 0.3;
+    function liveFeed(t) {
+      // a ceiling-corner camera in the quarters: the hero, phone in hand
+      const keep = S.hand.visible;
+      S.hand.visible = false;
+      secCam.position.copy(B(-2.3, 2.0, 2.3)); secCam.fov = 75; secCam.updateProjectionMatrix(); secCam.lookAt(B(1.2, -0.4, 1.0));
+      S.hero.visible = true; S.hero.position.copy(B(1.45, -0.45, 0)); S.hero.rotation.set(0, Math.PI / 2, 0);
+      secCam.layers.enable(1);
+      renderer.setRenderTarget(rtCam); renderer.setClearColor(0x000000, 1); renderer.render(scene, secCam);
+      renderer.readRenderTargetPixels(rtCam, 0, 0, FW, FH, camBuf);
+      if (!SCR.__live) SCR.__live = cnv(FW, FH)[0];
+      const g = SCR.__live.getContext("2d"), img = g.createImageData(FW, FH);
+      for (let y = 0; y < FH; y++) for (let x = 0; x < FW; x++) { const si = ((FH - 1 - y) * FW + x) * 4, di = (y * FW + x) * 4; for (let k = 0; k < 3; k++) img.data[di + k] = clamp(Math.pow(camBuf[si + k] / 255, 0.55) * 300, 0, 255); img.data[di + 3] = 255; }
+      g.putImageData(img, 0, 0);
+      S.hero.visible = false; S.hand.visible = keep;
+    }
+
+    function renderAt(t) {
+      if (!built) { pending = t; return; }
+      t = clamp(t, 0, DUR);
+      let mix = 1;
+      for (const [c, d, type] of TRANS) if (type === "mix" && t >= c && t < c + d) { drawWorld(c - 1 / FPS, rtPrev); mix = smooth((t - c) / d); }
+      drawWorld(t, rt);
+      post.uniforms.tPrev.value = mix < 1 ? rtPrev.texture : rt.texture;
+      post.uniforms.uMix.value = mix;
+      brightM.uniforms.t.value = rt.texture; pass(brightM, rtB1);
+      blurM.uniforms.t.value = rtB1.texture; blurM.uniforms.dir.value.set(1, 0); pass(blurM, rtB2);
+      blurM.uniforms.t.value = rtB2.texture; blurM.uniforms.dir.value.set(0, 1); pass(blurM, rtB1);
+      pass(post, null);
+    }
+
+    window.addEventListener("hf-seek", (e) => renderAt(e.detail.time));
+    window.__mwDebug = { renderAt, S, R, camera, scene, SCR };
+    build().then(() => {});
+  </script>
+</template>
